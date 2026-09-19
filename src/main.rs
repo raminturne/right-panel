@@ -164,7 +164,12 @@ fn set_passthrough(window: &tao::window::Window, on: bool) {
     let gw = window.gtk_window();
     if let Some(gdk) = gw.window() {
         let (w, h) = (gw.allocated_width().max(1), gw.allocated_height().max(1));
-        let rect = if on { gtk::cairo::RectangleInt::new(w - 3, 0, 3, h) } else { gtk::cairo::RectangleInt::new(0, 0, w, h) };
+        let strip = 4;
+        let rect = if on {
+            gtk::cairo::RectangleInt::new((w - strip).max(0), 0, strip, h)
+        } else {
+            gtk::cairo::RectangleInt::new(0, 0, w, h)
+        };
         gdk.input_shape_combine_region(&gtk::cairo::Region::create_rectangle(&rect), 0, 0);
     }
 }
@@ -226,8 +231,9 @@ mod tray {
 
 fn main() {
     #[cfg(target_os = "linux")]
-    if std::env::var("XDG_SESSION_TYPE").as_deref() == Ok("wayland") && std::env::var_os("GDK_BACKEND").is_none() {
-        // Wayland won't let an app position itself or read the pointer; XWayland does.
+    {
+        // On Linux, the panel relies on edge placement and shape masking which need X11/XWayland.
+        // Wayland (xdg-shell) forbids client-side positioning and input masking.
         unsafe { std::env::set_var("GDK_BACKEND", "x11") };
     }
     let dir = sys::data_dir();
@@ -255,6 +261,7 @@ fn main() {
     let x = mpos.x + msize.width as i32 - w;
     let y = mpos.y + (msize.height as i32 - h) / 2;
 
+
     let builder = WindowBuilder::new()
         .with_title("Right Panel")
         .with_decorations(false)
@@ -271,9 +278,19 @@ fn main() {
     #[cfg(target_os = "linux")]
     let builder = {
         use tao::platform::unix::WindowBuilderExtUnix;
-        builder.with_skip_taskbar(true)
+        builder.with_skip_taskbar(true).with_visible(false)
     };
     let window = builder.build(&event_loop).expect("window");
+    #[cfg(target_os = "linux")]
+    {
+        use gtk::prelude::*;
+        use tao::platform::unix::WindowExtUnix;
+        let gw = window.gtk_window();
+        gw.set_type_hint(gtk::gdk::WindowTypeHint::Dock);
+        gw.set_keep_above(true);
+        gw.move_(x, y);
+    }
+    #[cfg(not(target_os = "linux"))]
     set_passthrough(&window, true);
     #[cfg(windows)]
     {
@@ -299,9 +316,15 @@ fn main() {
     let webview = wv.build(&window).expect("webview");
     #[cfg(target_os = "linux")]
     let webview = {
+        use gtk::prelude::*;
         use tao::platform::unix::WindowExtUnix;
         use wry::WebViewBuilderExtUnix;
-        wv.build_gtk(window.default_vbox().expect("gtk box")).expect("webview")
+        let wv = wv.build_gtk(window.default_vbox().expect("gtk box")).expect("webview");
+        let gw = window.gtk_window();
+        gw.show_all();
+        gw.move_(x, y);
+        set_passthrough(&window, true);
+        wv
     };
 
     spawn_clip_watch(proxy.clone());
