@@ -3,12 +3,16 @@ name: Build & release
 on:
   push:
     tags: ["v*"]
-    branches: [main]
+    branches: [main, "feature/**"]
   pull_request:
   workflow_dispatch:
 
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   windows:
@@ -16,8 +20,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with: { components: rustfmt, clippy }
       - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: cargo test
+      - run: cargo clippy --all-targets -- -D warnings
       - run: cargo build --release
+      - name: Package example plugins
+        run: python scripts/package-plugins.py --check
+      - name: Bundle WebView2 loader
+        shell: pwsh
+        run: |
+          $loader = Get-ChildItem "$env:USERPROFILE\.cargo\registry\src" -Recurse -Filter WebView2Loader.dll |
+            Where-Object FullName -Match '\\x64\\WebView2Loader.dll$' | Select-Object -First 1
+          if (-not $loader) { throw "x64 WebView2Loader.dll not found" }
+          Copy-Item $loader.FullName target\release\WebView2Loader.dll
       - name: Installer (Inno Setup)
         shell: pwsh
         run: |
@@ -28,29 +45,38 @@ jobs:
         shell: pwsh
         run: |
           Copy-Item target\release\right-panel.exe dist\RightPanel-portable.exe
-          New-Item -ItemType Directory -Force pkg\RightPanel | Out-Null
+          New-Item -ItemType Directory -Force pkg\RightPanel\SamplePlugins | Out-Null
           Copy-Item target\release\right-panel.exe pkg\RightPanel\RightPanel.exe
+          Copy-Item target\release\WebView2Loader.dll pkg\RightPanel\
+          Copy-Item dist\plugins\*.rpp pkg\RightPanel\SamplePlugins\
           Copy-Item README.md, LICENSE pkg\RightPanel\
           Compress-Archive -Path pkg\RightPanel -DestinationPath dist\RightPanel-windows-x64.zip
       - uses: actions/upload-artifact@v4
         with: { name: windows, path: dist/* }
 
   linux:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libx11-dev libxdo-dev libayatana-appindicator3-dev
       - uses: dtolnay/rust-toolchain@stable
+        with: { components: rustfmt, clippy }
       - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: cargo test
+      - run: cargo clippy --all-targets -- -D warnings
       - run: cargo build --release
+      - name: Package example plugins
+        run: python3 scripts/package-plugins.py --check
       - name: Package (.tar.gz + .deb)
         run: |
           set -e
           VER=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
-          mkdir -p dist pkg/right-panel
+          mkdir -p dist pkg/right-panel/plugins
           cp target/release/right-panel assets/icon.png README.md LICENSE pkg/right-panel/
+          cp dist/plugins/*.rpp pkg/right-panel/plugins/
           tar -C pkg -czf dist/RightPanel-linux-x64.tar.gz right-panel
           D=deb/right-panel_${VER}_amd64
           mkdir -p $D/DEBIAN $D/usr/bin $D/usr/share/applications $D/usr/share/icons/hicolor/256x256/apps
@@ -65,6 +91,7 @@ jobs:
   macos:
     runs-on: macos-latest
     strategy:
+      fail-fast: false
       matrix:
         include:
           - { target: aarch64-apple-darwin, arch: arm64 }
@@ -72,17 +99,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-        with: { targets: "${{ matrix.target }}" }
+        with:
+          targets: ${{ matrix.target }}
+          components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with: { key: "${{ matrix.target }}" }
+      - run: cargo fmt --check
+      - run: cargo test --no-run --target ${{ matrix.target }}
+      - run: cargo clippy --all-targets --target ${{ matrix.target }} -- -D warnings
       - run: cargo build --release --target ${{ matrix.target }}
+      - name: Package example plugins
+        run: python3 scripts/package-plugins.py --check
       - name: App bundle + dmg
         run: |
           set -e
           VER=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
           APP="dist/Right Panel.app"
-          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Plugins"
           cp target/${{ matrix.target }}/release/right-panel "$APP/Contents/MacOS/right-panel"
+          cp dist/plugins/*.rpp "$APP/Contents/Plugins/"
           mkdir icon.iconset
           for s in 16 32 128 256; do
             sips -z $s $s assets/icon.png --out icon.iconset/icon_${s}x${s}.png >/dev/null
@@ -118,12 +153,13 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [windows, linux, macos]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with: { path: artifacts, merge-multiple: true }
       - uses: softprops/action-gh-release@v2
         with:
-          name: Right Panel ${{ github.ref_name }}
-          body_path: .github/RELEASE_NOTES.md
+          generate_release_notes: true
           files: artifacts/*

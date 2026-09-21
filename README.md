@@ -86,6 +86,10 @@ Built with Rust, [tao](https://github.com/tauri-apps/tao) + [wry](https://github
 
 Settings live in `%APPDATA%\RightPanel` (Windows), `~/Library/Application Support/RightPanel` (macOS) or `~/.config/right-panel` (Linux).
 
+## Plugins
+
+Extend Right Panel with local community widgets without recompiling: sandboxed plugin UI, an explicit permission-checked API, plugin-scoped storage, and Dock/More ordering. Install `.rpp` packages in **Settings → Plugins**. See the [plugin guide](docs/plugins.md) and [examples](examples/plugins).
+
 ## License
 
 [MIT](LICENSE)

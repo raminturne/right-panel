@@ -1,0 +1,1 @@
+{"manifest_version":1,"id":"dev-tools","name":"Developer Tools","version":"1.0.1","description":"Generate UUIDs and copy them instantly.","author":"Right Panel Community","icon":"icon.svg","entry":"index.html","permissions":["clipboard.write"]}

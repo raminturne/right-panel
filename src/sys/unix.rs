@@ -8,22 +8,35 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
-        atomic::{AtomicU64, Ordering},
         Mutex,
+        atomic::{AtomicU64, Ordering},
     },
 };
 
-pub const PLATFORM: &str = if cfg!(target_os = "macos") { "macos" } else { "linux" };
+pub const PLATFORM: &str = if cfg!(target_os = "macos") {
+    "macos"
+} else {
+    "linux"
+};
 
 static SCALE: AtomicU64 = AtomicU64::new(0x3FF0_0000_0000_0000); // 1.0
 static AWAKE: Mutex<Option<Child>> = Mutex::new(None);
 
 fn run(cmd: &str, args: &[&str]) -> bool {
-    Command::new(cmd).args(args).stdout(Stdio::null()).stderr(Stdio::null()).spawn().is_ok()
+    Command::new(cmd)
+        .args(args)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .is_ok()
 }
 
 fn output(cmd: &str, args: &[&str]) -> Option<String> {
-    let o = Command::new(cmd).args(args).stderr(Stdio::null()).output().ok()?;
+    let o = Command::new(cmd)
+        .args(args)
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
     let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
     (o.status.success() && !s.is_empty()).then_some(s)
 }
@@ -36,13 +49,14 @@ pub fn data_dir() -> PathBuf {
     let dir = if cfg!(target_os = "macos") {
         PathBuf::from(home()).join("Library/Application Support/RightPanel")
     } else {
-        std::env::var("XDG_CONFIG_HOME").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from(home()).join(".config")).join("right-panel")
+        std::env::var("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from(home()).join(".config"))
+            .join("right-panel")
     };
     let _ = fs::create_dir_all(&dir);
     dir
 }
-
-pub fn set_self_window(_: isize) {}
 
 /// macOS reports the cursor in points; the window is placed in physical pixels.
 pub fn set_scale(s: f64) {
@@ -68,7 +82,9 @@ pub fn set_startup(on: bool) {
         let _ = fs::remove_file(f);
         return;
     }
-    let exe = std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default();
+    let exe = std::env::current_exe()
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
     let body = if cfg!(target_os = "macos") {
         format!(
             "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
@@ -76,7 +92,9 @@ pub fn set_startup(on: bool) {
              <key>RunAtLoad</key><true/></dict></plist>\n"
         )
     } else {
-        format!("[Desktop Entry]\nType=Application\nName=Right Panel\nExec=\"{exe}\"\nX-GNOME-Autostart-enabled=true\n")
+        format!(
+            "[Desktop Entry]\nType=Application\nName=Right Panel\nExec=\"{exe}\"\nX-GNOME-Autostart-enabled=true\n"
+        )
     };
     if let Some(dir) = f.parent() {
         let _ = fs::create_dir_all(dir);
@@ -89,7 +107,11 @@ pub fn cursor_pos() -> Option<(i32, i32)> {
     use mouse_position::mouse_position::Mouse;
     match Mouse::get_mouse_position() {
         Mouse::Position { x, y } => {
-            let s = if cfg!(target_os = "macos") { f64::from_bits(SCALE.load(Ordering::Relaxed)) } else { 1.0 };
+            let s = if cfg!(target_os = "macos") {
+                f64::from_bits(SCALE.load(Ordering::Relaxed))
+            } else {
+                1.0
+            };
             Some(((x as f64 * s) as i32, (y as f64 * s) as i32))
         }
         Mouse::Error => None,
@@ -124,8 +146,12 @@ pub fn press(name: &str) {
             "play" => player("playpause"),
             "next" => player("next track"),
             "prev" => player("previous track"),
-            "volup" => "set volume output volume ((output volume of (get volume settings)) + 6)".into(),
-            "voldown" => "set volume output volume ((output volume of (get volume settings)) - 6)".into(),
+            "volup" => {
+                "set volume output volume ((output volume of (get volume settings)) + 6)".into()
+            }
+            "voldown" => {
+                "set volume output volume ((output volume of (get volume settings)) - 6)".into()
+            }
             "mute" => "set volume output muted not (output muted of (get volume settings))".into(),
             _ => return,
         };
@@ -175,7 +201,15 @@ pub fn keep_awake(on: bool) {
         *g = if cfg!(target_os = "macos") {
             Command::new("caffeinate").arg("-di").spawn().ok()
         } else {
-            Command::new("systemd-inhibit").args(["--what=idle:sleep", "--why=Right Panel keep awake", "sleep", "infinity"]).spawn().ok()
+            Command::new("systemd-inhibit")
+                .args([
+                    "--what=idle:sleep",
+                    "--why=Right Panel keep awake",
+                    "sleep",
+                    "infinity",
+                ])
+                .spawn()
+                .ok()
         };
     }
 }
@@ -185,7 +219,13 @@ pub fn screenshot() {
         run("screencapture", &["-ic"]);
     } else {
         // whichever screenshot tool the desktop has
-        run("sh", &["-c", "sleep 0.35; spectacle -r || gnome-screenshot -a || flameshot gui || xfce4-screenshooter -r"]);
+        run(
+            "sh",
+            &[
+                "-c",
+                "sleep 0.35; spectacle -r || gnome-screenshot -a || flameshot gui || xfce4-screenshooter -r",
+            ],
+        );
     }
 }
 
@@ -196,11 +236,45 @@ pub fn pick_color(done: impl FnOnce(Option<String>) + Send + 'static) {
 /* ---------------- apps ---------------- */
 pub fn pick_file() -> Option<String> {
     if cfg!(target_os = "macos") {
-        output("osascript", &["-e", "POSIX path of (path to (choose application with prompt \"Add app to Right Panel\"))"])
+        output(
+            "osascript",
+            &[
+                "-e",
+                "POSIX path of (path to (choose application with prompt \"Add app to Right Panel\"))",
+            ],
+        )
     } else {
-        output("zenity", &["--file-selection", "--title=Add app to Right Panel", "--filename=/usr/share/applications/"])
-            .or_else(|| output("kdialog", &["--getopenfilename", "/usr/share/applications"]))
+        output(
+            "zenity",
+            &[
+                "--file-selection",
+                "--title=Add app to Right Panel",
+                "--filename=/usr/share/applications/",
+            ],
+        )
+        .or_else(|| output("kdialog", &["--getopenfilename", "/usr/share/applications"]))
     }
+}
+
+pub fn pick_plugin_package() -> Option<String> {
+    output(
+        "zenity",
+        &[
+            "--file-selection",
+            "--title=Install Right Panel plugin",
+            "--file-filter=Right Panel plugin | *.rpp *.zip",
+        ],
+    )
+    .or_else(|| {
+        output(
+            "kdialog",
+            &[
+                "--getopenfilename",
+                ".",
+                "Right Panel plugins (*.rpp *.zip)",
+            ],
+        )
+    })
 }
 
 pub fn launch(path: &str) {
@@ -212,14 +286,29 @@ pub fn launch(path: &str) {
         };
         run("open", &[target]);
     } else if path.ends_with(".desktop") {
-        let stem = Path::new(path).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let stem = Path::new(path)
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
         if !run("gtk-launch", &[&stem]) {
             run("dex", &[path]);
         }
     } else {
         match path {
-            "taskmgr" => run("sh", &["-c", "gnome-system-monitor || plasma-systemmonitor || xfce4-taskmanager"]),
-            "ms-settings:" => run("sh", &["-c", "gnome-control-center || systemsettings || xfce4-settings-manager"]),
+            "taskmgr" => run(
+                "sh",
+                &[
+                    "-c",
+                    "gnome-system-monitor || plasma-systemmonitor || xfce4-taskmanager",
+                ],
+            ),
+            "ms-settings:" => run(
+                "sh",
+                &[
+                    "-c",
+                    "gnome-control-center || systemsettings || xfce4-settings-manager",
+                ],
+            ),
             p => run("xdg-open", &[p]),
         };
     }

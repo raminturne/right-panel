@@ -1,0 +1,2 @@
+# Security model
+Plugin HTML runs in an opaque-origin `iframe sandbox="allow-scripts"`; it cannot access the host DOM or its native IPC object. Messages are mapped to the exact plugin iframe and checked again in Rust against the installed manifest. Storage is per-plugin and capped at 64 KiB. Network access is not an enforceable permission in WebView sandboxed JavaScript: plugins should not be treated as trusted code and direct browser fetch behavior is documented as a platform limitation.

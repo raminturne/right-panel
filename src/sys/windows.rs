@@ -16,17 +16,23 @@ use windows_sys::Win32::{
     System::{
         DataExchange::GetClipboardSequenceNumber,
         Diagnostics::Debug::MessageBeep,
-        Power::{SetThreadExecutionState, ES_CONTINUOUS, ES_DISPLAY_REQUIRED, ES_SYSTEM_REQUIRED},
-        Registry::{RegDeleteKeyValueW, RegGetValueW, RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ, RRF_RT_REG_SZ},
+        Power::{ES_CONTINUOUS, ES_DISPLAY_REQUIRED, ES_SYSTEM_REQUIRED, SetThreadExecutionState},
+        Registry::{
+            HKEY_CURRENT_USER, REG_SZ, RRF_RT_REG_SZ, RegDeleteKeyValueW, RegGetValueW,
+            RegSetKeyValueW,
+        },
         Shutdown::LockWorkStation,
     },
     UI::Input::KeyboardAndMouse::{
-        GetAsyncKeyState, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VK_CONTROL, VK_D, VK_ESCAPE, VK_LBUTTON, VK_LWIN,
-        VK_MEDIA_NEXT_TRACK, VK_MEDIA_PLAY_PAUSE, VK_MEDIA_PREV_TRACK, VK_V, VK_VOLUME_DOWN, VK_VOLUME_MUTE, VK_VOLUME_UP,
+        GetAsyncKeyState, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput,
+        VK_CONTROL, VK_D, VK_ESCAPE, VK_LBUTTON, VK_LWIN, VK_MEDIA_NEXT_TRACK, VK_MEDIA_PLAY_PAUSE,
+        VK_MEDIA_PREV_TRACK, VK_V, VK_VOLUME_DOWN, VK_VOLUME_MUTE, VK_VOLUME_UP,
     },
     UI::WindowsAndMessaging::{
-        GetCursorPos, GetForegroundWindow, GetWindowLongPtrW, GetWindowTextW, PostMessageW, SetForegroundWindow, SetWindowPos, GWL_EXSTYLE, HWND_NOTOPMOST,
-        HWND_TOPMOST, MB_ICONASTERISK, SC_MONITORPOWER, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, WM_SYSCOMMAND, WS_EX_TOPMOST,
+        GWL_EXSTYLE, GetCursorPos, GetForegroundWindow, GetWindowLongPtrW, GetWindowTextW,
+        HWND_NOTOPMOST, HWND_TOPMOST, MB_ICONASTERISK, PostMessageW, SC_MONITORPOWER,
+        SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetForegroundWindow, SetWindowPos, WM_SYSCOMMAND,
+        WS_EX_TOPMOST,
     },
 };
 
@@ -74,7 +80,17 @@ pub fn set_scale(_: f64) {}
 /* ---------------- startup (HKCU\...\Run) ---------------- */
 fn reg_get(name: &str) -> bool {
     let (k, v) = (wide(RUN_KEY), wide(name));
-    unsafe { RegGetValueW(HKEY_CURRENT_USER, k.as_ptr(), v.as_ptr(), RRF_RT_REG_SZ, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut()) == 0 }
+    unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            k.as_ptr(),
+            v.as_ptr(),
+            RRF_RT_REG_SZ,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        ) == 0
+    }
 }
 
 fn reg_del(name: &str) {
@@ -91,9 +107,20 @@ pub fn set_startup(on: bool) {
         return reg_del(RUN_NAME);
     }
     let (k, v) = (wide(RUN_KEY), wide(RUN_NAME));
-    let exe = std::env::current_exe().map(|p| format!("\"{}\"", p.display())).unwrap_or_default();
+    let exe = std::env::current_exe()
+        .map(|p| format!("\"{}\"", p.display()))
+        .unwrap_or_default();
     let data = wide(&exe);
-    unsafe { RegSetKeyValueW(HKEY_CURRENT_USER, k.as_ptr(), v.as_ptr(), REG_SZ, data.as_ptr() as *const c_void, (data.len() * 2) as u32) };
+    unsafe {
+        RegSetKeyValueW(
+            HKEY_CURRENT_USER,
+            k.as_ptr(),
+            v.as_ptr(),
+            REG_SZ,
+            data.as_ptr() as *const c_void,
+            (data.len() * 2) as u32,
+        )
+    };
 }
 
 /* ---------------- pointer ---------------- */
@@ -122,14 +149,28 @@ pub fn clip_seq() -> u64 {
 fn key(vk: u16, up: bool) -> INPUT {
     INPUT {
         r#type: INPUT_KEYBOARD,
-        Anonymous: INPUT_0 { ki: KEYBDINPUT { wVk: vk, wScan: 0, dwFlags: if up { KEYEVENTF_KEYUP } else { 0 }, time: 0, dwExtraInfo: 0 } },
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: vk,
+                wScan: 0,
+                dwFlags: if up { KEYEVENTF_KEYUP } else { 0 },
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
     }
 }
 
 fn send_combo(combo: &[u16]) {
     let mut inputs: Vec<INPUT> = combo.iter().map(|&k| key(k, false)).collect();
     inputs.extend(combo.iter().rev().map(|&k| key(k, true)));
-    unsafe { SendInput(inputs.len() as u32, inputs.as_ptr(), std::mem::size_of::<INPUT>() as i32) };
+    unsafe {
+        SendInput(
+            inputs.len() as u32,
+            inputs.as_ptr(),
+            std::mem::size_of::<INPUT>() as i32,
+        )
+    };
 }
 
 /// Give focus back to the app the user was in, then press Ctrl+V.
@@ -170,17 +211,40 @@ pub fn toggle_topmost() -> String {
         let mut buf = [0u16; 120];
         let n = GetWindowTextW(hwnd, buf.as_mut_ptr(), buf.len() as i32).max(0) as usize;
         let title = String::from_utf16_lossy(&buf[..n]);
-        let title = if title.chars().count() > 28 { format!("{}…", title.chars().take(28).collect::<String>()) } else { title };
+        let title = if title.chars().count() > 28 {
+            format!("{}…", title.chars().take(28).collect::<String>())
+        } else {
+            title
+        };
         let on_top = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST != 0;
-        SetWindowPos(hwnd, if on_top { HWND_NOTOPMOST } else { HWND_TOPMOST }, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-        if on_top { format!("Unpinned {title}") } else { format!("📌 {title} stays on top") }
+        SetWindowPos(
+            hwnd,
+            if on_top { HWND_NOTOPMOST } else { HWND_TOPMOST },
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+        if on_top {
+            format!("Unpinned {title}")
+        } else {
+            format!("📌 {title} stays on top")
+        }
     }
 }
 
 pub fn screen_off() {
     thread::spawn(|| {
         thread::sleep(Duration::from_millis(600)); // let the panel slide away first
-        unsafe { PostMessageW(SELF_HWND.load(Ordering::Relaxed) as HWND, WM_SYSCOMMAND, SC_MONITORPOWER as usize, 2) };
+        unsafe {
+            PostMessageW(
+                SELF_HWND.load(Ordering::Relaxed) as HWND,
+                WM_SYSCOMMAND,
+                SC_MONITORPOWER as usize,
+                2,
+            )
+        };
     });
 }
 
@@ -194,14 +258,20 @@ pub fn beep() {
 
 /// ES_CONTINUOUS on the (long-lived) main thread keeps PC + display awake until turned off.
 pub fn keep_awake(on: bool) {
-    let f = if on { ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED } else { ES_CONTINUOUS };
+    let f = if on {
+        ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED
+    } else {
+        ES_CONTINUOUS
+    };
     unsafe { SetThreadExecutionState(f) };
 }
 
 pub fn screenshot() {
     thread::spawn(|| {
         thread::sleep(Duration::from_millis(350));
-        let _ = std::process::Command::new("explorer.exe").arg("ms-screenclip:").spawn();
+        let _ = std::process::Command::new("explorer.exe")
+            .arg("ms-screenclip:")
+            .spawn();
     });
 }
 
@@ -222,29 +292,45 @@ pub fn pick_color(done: impl FnOnce(Option<String>) + Send + 'static) {
                 let dc = GetDC(std::ptr::null_mut());
                 let c = GetPixel(dc, p.x, p.y);
                 ReleaseDC(std::ptr::null_mut(), dc);
-                return done(Some(format!("#{:02x}{:02x}{:02x}", c & 0xff, (c >> 8) & 0xff, (c >> 16) & 0xff)));
+                return done(Some(format!(
+                    "#{:02x}{:02x}{:02x}",
+                    c & 0xff,
+                    (c >> 8) & 0xff,
+                    (c >> 16) & 0xff
+                )));
             }
         }
     });
 }
 
-
-
 use windows_sys::Win32::{
-    Graphics::Gdi::{CreateCompatibleDC, DeleteDC, DeleteObject, GetDIBits, GetObjectW, BITMAP, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS},
+    Graphics::Gdi::{
+        BI_RGB, BITMAP, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleDC, DIB_RGB_COLORS, DeleteDC,
+        DeleteObject, GetDIBits, GetObjectW,
+    },
     Storage::FileSystem::FILE_ATTRIBUTE_NORMAL,
     UI::{
-        Controls::Dialogs::{GetOpenFileNameW, OFN_FILEMUSTEXIST, OFN_NODEREFERENCELINKS, OFN_PATHMUSTEXIST, OPENFILENAMEW},
-        Controls::{ImageList_GetIcon, HIMAGELIST, ILD_TRANSPARENT},
-        Shell::{SHGetFileInfoW, SHGetImageList, ShellExecuteW, SHFILEINFOW, SHGFI_SYSICONINDEX, SHIL_EXTRALARGE},
-        WindowsAndMessaging::{DestroyIcon, GetIconInfo, PrivateExtractIconsW, HICON, ICONINFO, SW_SHOWNORMAL},
+        Controls::Dialogs::{
+            GetOpenFileNameW, OFN_FILEMUSTEXIST, OFN_NODEREFERENCELINKS, OFN_PATHMUSTEXIST,
+            OPENFILENAMEW,
+        },
+        Controls::{HIMAGELIST, ILD_TRANSPARENT, ImageList_GetIcon},
+        Shell::{
+            SHFILEINFOW, SHGFI_SYSICONINDEX, SHGetFileInfoW, SHGetImageList, SHIL_EXTRALARGE,
+            ShellExecuteW,
+        },
+        WindowsAndMessaging::{
+            DestroyIcon, GetIconInfo, HICON, ICONINFO, PrivateExtractIconsW, SW_SHOWNORMAL,
+        },
     },
 };
 
 /// Native "Open" dialog, starting in the Start Menu so shortcuts are easy to pick.
 pub fn pick_file() -> Option<String> {
     let mut buf = vec![0u16; 1024];
-    let filter: Vec<u16> = "Apps and shortcuts\0*.exe;*.lnk;*.url;*.bat;*.cmd\0All files\0*.*\0\0".encode_utf16().collect();
+    let filter: Vec<u16> = "Apps and shortcuts\0*.exe;*.lnk;*.url;*.bat;*.cmd\0All files\0*.*\0\0"
+        .encode_utf16()
+        .collect();
     let start = wide(r"C:\ProgramData\Microsoft\Windows\Start Menu\Programs");
     let title = wide("Add app to Right Panel");
     unsafe {
@@ -264,11 +350,47 @@ pub fn pick_file() -> Option<String> {
     Some(String::from_utf16_lossy(&buf[..len]))
 }
 
+/// Native package picker, deliberately separate from the app-shortcut dialog.
+pub fn pick_plugin_package() -> Option<String> {
+    let mut buf = vec![0u16; 1024];
+    let filter: Vec<u16> =
+        "Right Panel plugins\0*.rpp;*.zip\0Right Panel packages\0*.rpp\0ZIP archives\0*.zip\0\0"
+            .encode_utf16()
+            .collect();
+    let title = wide("Install Right Panel plugin");
+    unsafe {
+        let mut ofn: OPENFILENAMEW = std::mem::zeroed();
+        ofn.lStructSize = std::mem::size_of::<OPENFILENAMEW>() as u32;
+        ofn.lpstrFilter = filter.as_ptr();
+        ofn.lpstrFile = buf.as_mut_ptr();
+        ofn.nMaxFile = buf.len() as u32;
+        ofn.lpstrTitle = title.as_ptr();
+        ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+        if GetOpenFileNameW(&mut ofn) == 0 {
+            return None;
+        }
+    }
+    let len = buf.iter().position(|&c| c == 0).unwrap_or(0);
+    Some(String::from_utf16_lossy(&buf[..len]))
+}
+
 pub fn launch(path: &str) {
     let (op, p) = (wide("open"), wide(path));
-    let dir = Path::new(path).parent().filter(|d| d.is_dir()).map(|d| wide(&d.to_string_lossy()));
+    let dir = Path::new(path)
+        .parent()
+        .filter(|d| d.is_dir())
+        .map(|d| wide(&d.to_string_lossy()));
     let dir_ptr = dir.as_ref().map_or(std::ptr::null(), |d| d.as_ptr());
-    unsafe { ShellExecuteW(std::ptr::null_mut(), op.as_ptr(), p.as_ptr(), std::ptr::null(), dir_ptr, SW_SHOWNORMAL) };
+    unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            op.as_ptr(),
+            p.as_ptr(),
+            std::ptr::null(),
+            dir_ptr,
+            SW_SHOWNORMAL,
+        )
+    };
 }
 
 /// Icon of any file (exe gets a crisp 64px icon, shortcuts use the shell icon) as a PNG data URI.
@@ -283,17 +405,31 @@ pub fn icon_data_uri(path: &str) -> Option<String> {
         if icon.is_null() {
             // system image list index → 48px icon; ImageList_GetIcon without ILD_OVERLAYMASK has no shortcut arrow
             let mut info: SHFILEINFOW = std::mem::zeroed();
-            SHGetFileInfoW(p.as_ptr(), FILE_ATTRIBUTE_NORMAL, &mut info, std::mem::size_of::<SHFILEINFOW>() as u32, SHGFI_SYSICONINDEX);
-            const IID_IIMAGELIST: windows_sys::core::GUID = windows_sys::core::GUID::from_u128(0x46eb5926_582e_4017_9fdf_e8998daa0950);
+            SHGetFileInfoW(
+                p.as_ptr(),
+                FILE_ATTRIBUTE_NORMAL,
+                &mut info,
+                std::mem::size_of::<SHFILEINFOW>() as u32,
+                SHGFI_SYSICONINDEX,
+            );
+            const IID_IIMAGELIST: windows_sys::core::GUID =
+                windows_sys::core::GUID::from_u128(0x46eb5926_582e_4017_9fdf_e8998daa0950);
             let mut list: *mut core::ffi::c_void = std::ptr::null_mut();
-            if SHGetImageList(SHIL_EXTRALARGE as i32, &IID_IIMAGELIST, &mut list) >= 0 && !list.is_null() {
+            if SHGetImageList(SHIL_EXTRALARGE as i32, &IID_IIMAGELIST, &mut list) >= 0
+                && !list.is_null()
+            {
                 icon = ImageList_GetIcon(list as HIMAGELIST, info.iIcon, ILD_TRANSPARENT);
             }
         }
         if icon.is_null() {
             return None;
         }
-        let out = icon_to_rgba(icon).map(|(w, h, px)| format!("data:image/png;base64,{}", util::base64(&util::png(w, h, &px))));
+        let out = icon_to_rgba(icon).map(|(w, h, px)| {
+            format!(
+                "data:image/png;base64,{}",
+                util::base64(&util::png(w, h, &px))
+            )
+        });
         DestroyIcon(icon);
         out
     }
@@ -303,11 +439,17 @@ unsafe fn icon_to_rgba(icon: HICON) -> Option<(u32, u32, Vec<u8>)> {
     unsafe {
         let mut ii: ICONINFO = std::mem::zeroed();
         if GetIconInfo(icon, &mut ii) == 0 || ii.hbmColor.is_null() {
-            if !ii.hbmMask.is_null() { DeleteObject(ii.hbmMask); }
+            if !ii.hbmMask.is_null() {
+                DeleteObject(ii.hbmMask);
+            }
             return None;
         }
         let mut bm: BITMAP = std::mem::zeroed();
-        GetObjectW(ii.hbmColor, std::mem::size_of::<BITMAP>() as i32, &mut bm as *mut _ as *mut _);
+        GetObjectW(
+            ii.hbmColor,
+            std::mem::size_of::<BITMAP>() as i32,
+            &mut bm as *mut _ as *mut _,
+        );
         let (w, h) = (bm.bmWidth as u32, bm.bmHeight as u32);
         let mut bi: BITMAPINFO = std::mem::zeroed();
         bi.bmiHeader = BITMAPINFOHEADER {
@@ -321,7 +463,15 @@ unsafe fn icon_to_rgba(icon: HICON) -> Option<(u32, u32, Vec<u8>)> {
         };
         let mut px = vec![0u8; (w * h * 4) as usize];
         let dc = CreateCompatibleDC(std::ptr::null_mut());
-        let ok = GetDIBits(dc, ii.hbmColor, 0, h, px.as_mut_ptr() as *mut _, &mut bi, DIB_RGB_COLORS);
+        let ok = GetDIBits(
+            dc,
+            ii.hbmColor,
+            0,
+            h,
+            px.as_mut_ptr() as *mut _,
+            &mut bi,
+            DIB_RGB_COLORS,
+        );
         DeleteDC(dc);
         DeleteObject(ii.hbmColor);
         DeleteObject(ii.hbmMask);
@@ -331,9 +481,10 @@ unsafe fn icon_to_rgba(icon: HICON) -> Option<(u32, u32, Vec<u8>)> {
         let has_alpha = px.chunks(4).any(|c| c[3] != 0);
         for c in px.chunks_mut(4) {
             c.swap(0, 2); // BGRA → RGBA
-            if !has_alpha { c[3] = 255; }
+            if !has_alpha {
+                c[3] = 255;
+            }
         }
         Some((w, h, px))
     }
 }
-

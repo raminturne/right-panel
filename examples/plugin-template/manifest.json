@@ -1,0 +1,11 @@
+{
+  "manifest_version": 1,
+  "api_version": 1,
+  "id": "my-plugin",
+  "name": "My Plugin",
+  "version": "0.1.0",
+  "description": "A Right Panel plugin.",
+  "author": "Your name",
+  "entry": "index.html",
+  "permissions": ["storage"]
+}

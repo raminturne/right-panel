@@ -4,19 +4,29 @@ use std::path::Path;
 
 pub fn display_name(path: &str) -> String {
     let p = Path::new(path.trim_end_matches('/'));
-    p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string())
+    p.file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.to_string())
 }
 
 /* ---- tiny PNG encoder (uncompressed deflate, fine for 64px icons) ---- */
+#[cfg(windows)]
 fn crc32(data: &[u8]) -> u32 {
     let mut c = !0u32;
     for &b in data {
         c ^= b as u32;
-        for _ in 0..8 { c = if c & 1 != 0 { 0xEDB88320 ^ (c >> 1) } else { c >> 1 }; }
+        for _ in 0..8 {
+            c = if c & 1 != 0 {
+                0xEDB88320 ^ (c >> 1)
+            } else {
+                c >> 1
+            };
+        }
     }
     !c
 }
 
+#[cfg(windows)]
 pub fn png(w: u32, h: u32, rgba: &[u8]) -> Vec<u8> {
     let mut raw = Vec::with_capacity((w * h * 4 + h) as usize);
     for row in rgba.chunks((w * 4) as usize) {
@@ -33,7 +43,10 @@ pub fn png(w: u32, h: u32, rgba: &[u8]) -> Vec<u8> {
         z.extend_from_slice(ch);
     }
     let (mut a, mut b) = (1u32, 0u32);
-    for &x in &raw { a = (a + x as u32) % 65521; b = (b + a) % 65521; }
+    for &x in &raw {
+        a = (a + x as u32) % 65521;
+        b = (b + a) % 65521;
+    }
     z.extend_from_slice(&((b << 16) | a).to_be_bytes());
 
     let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
@@ -58,9 +71,15 @@ pub fn base64(data: &[u8]) -> String {
     const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut s = String::with_capacity(data.len() * 4 / 3 + 4);
     for c in data.chunks(3) {
-        let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
+        let n = (c[0] as u32) << 16
+            | (*c.get(1).unwrap_or(&0) as u32) << 8
+            | *c.get(2).unwrap_or(&0) as u32;
         for i in 0..4 {
-            if i <= c.len() { s.push(T[(n >> (18 - 6 * i) & 63) as usize] as char); } else { s.push('='); }
+            if i <= c.len() {
+                s.push(T[(n >> (18 - 6 * i) & 63) as usize] as char);
+            } else {
+                s.push('=');
+            }
         }
     }
     s

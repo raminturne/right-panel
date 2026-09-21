@@ -6,6 +6,8 @@ fn main() {
         res.set_icon("assets/icon.ico");
         res.set("ProductName", "Right Panel");
         res.set("FileDescription", "Right Panel");
-        res.compile().expect("resources");
+        if let Err(error) = res.compile() {
+            println!("cargo:warning=Windows resources were skipped: {error}");
+        }
     }
 }

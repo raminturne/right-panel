@@ -1,0 +1,1 @@
+{"manifest_version":1,"id":"clock","name":"Local Clock","version":"1.0.1","description":"A clean local clock widget.","author":"Right Panel Community","icon":"icon.svg","entry":"index.html","permissions":["storage"]}

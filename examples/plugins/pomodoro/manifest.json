@@ -1,0 +1,1 @@
+{"manifest_version":1,"id":"pomodoro","name":"Pomodoro Timer","version":"1.0.1","description":"Focus timer with persistent state.","author":"Right Panel Community","icon":"icon.svg","entry":"index.html","permissions":["storage"]}
