@@ -1,6 +1,6 @@
 [package]
 name = "right-panel"
-version = "1.0.1"
+version = "1.0.2"
 edition = "2024"
 description = "A liquid side panel for your screen edge: emoji, clipboard, colors, notes, apps and more."
 license = "MIT"

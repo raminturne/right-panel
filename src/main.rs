@@ -232,9 +232,11 @@ mod tray {
 fn main() {
     #[cfg(target_os = "linux")]
     {
-        // On Linux, the panel relies on edge placement and shape masking which need X11/XWayland.
-        // Wayland (xdg-shell) forbids client-side positioning and input masking.
-        unsafe { std::env::set_var("GDK_BACKEND", "x11") };
+        // The panel needs edge placement + input shaping, which Wayland (xdg-shell) forbids, so it
+        // runs through XWayland. RIGHT_PANEL_BACKEND=wayland opts out (for testing on compositors
+        // where that works, or systems without XWayland).
+        let want = std::env::var("RIGHT_PANEL_BACKEND").unwrap_or_else(|_| "x11".into());
+        unsafe { std::env::set_var("GDK_BACKEND", &want) };
     }
     let dir = sys::data_dir();
     let settings_path = dir.join("settings.json");
@@ -288,6 +290,7 @@ fn main() {
         let gw = window.gtk_window();
         gw.set_type_hint(gtk::gdk::WindowTypeHint::Dock);
         gw.set_keep_above(true);
+        gw.set_accept_focus(true); // dock-type windows still need the keyboard for search / notes
         gw.move_(x, y);
     }
     #[cfg(not(target_os = "linux"))]

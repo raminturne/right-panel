@@ -127,3 +127,14 @@ jobs:
           name: Right Panel ${{ github.ref_name }}
           body_path: .github/RELEASE_NOTES.md
           files: artifacts/*
+      - name: Put the new version on the README download buttons
+        run: |
+          set -e
+          git fetch origin main && git checkout main
+          sed -i -E "s/%20v[0-9]+\.[0-9]+\.[0-9]+-/%20${{ github.ref_name }}-/g" README.md
+          if ! git diff --quiet README.md; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -qam "README: download buttons now say ${{ github.ref_name }}"
+            git push
+          fi

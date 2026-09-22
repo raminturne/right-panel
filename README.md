@@ -65,7 +65,7 @@ Move your mouse to the right edge and it pours out: emoji, clipboard history, co
 | **Windows 10/11** | `RightPanel-Setup.exe` | Recommended. Per-user install, no admin needed |
 | | `RightPanel-portable.exe` / `.zip` | No install, just run it |
 | **macOS 11+** *(beta)* | `RightPanel-macos-arm64.dmg` / `-x64.dmg` | Not notarized: right-click the app → **Open** the first time |
-| **Linux** *(beta)* | `.deb` or `.tar.gz` | Needs WebKitGTK 4.1. Works on X11 and Wayland (via XWayland) |
+| **Linux** *(beta)* | `.deb` or `.tar.gz` | Needs WebKitGTK 4.1. Works on X11 and Wayland (runs through XWayland; `RIGHT_PANEL_BACKEND=wayland` opts out) |
 
 Windows uses the built-in WebView2 runtime (already on Windows 10/11), which is why the app is under 1 MB.
 
