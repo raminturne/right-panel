@@ -228,3 +228,13 @@ pub fn launch(path: &str) {
 pub fn icon_data_uri(_: &str) -> Option<String> {
     None
 }
+
+pub fn single_instance() -> bool {
+    true
+}
+
+pub fn context_menu_enabled() -> bool {
+    false
+}
+
+pub fn set_context_menu(_: bool) {}

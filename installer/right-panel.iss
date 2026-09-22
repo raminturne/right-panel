@@ -30,6 +30,7 @@ RestartApplications=no
 [Tasks]
 Name: "startup"; Description: "Start Right Panel when Windows starts"; GroupDescription: "Options:"
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Options:"; Flags: unchecked
+Name: "contextmenu"; Description: "Add ""Add to Right Panel"" to the right-click menu"; GroupDescription: "Options:"
 
 [Files]
 Source: "..\target\release\right-panel.exe"; DestDir: "{app}"; DestName: "{#AppExe}"; Flags: ignoreversion
@@ -43,9 +44,11 @@ Name: "{userdesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopico
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "RightPanel"; ValueData: """{app}\{#AppExe}"""; Flags: uninsdeletevalue; Tasks: startup
 
 [Run]
+Filename: "{app}\{#AppExe}"; Parameters: "--context-menu on"; Flags: runhidden waituntilterminated; Tasks: contextmenu
 Filename: "{app}\{#AppExe}"; Description: "Launch Right Panel now"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
+Filename: "{app}\{#AppExe}"; Parameters: "--context-menu off"; Flags: runhidden waituntilterminated; RunOnceId: "CtxMenu"
 Filename: "taskkill.exe"; Parameters: "/F /IM {#AppExe}"; Flags: runhidden; RunOnceId: "KillApp"
 
 [UninstallDelete]

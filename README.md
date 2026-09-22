@@ -52,6 +52,11 @@ Move your mouse to the right edge and it pours out: emoji, clipboard history, co
 | 🔤 **Text tools** | UPPER/lower/Title, trim, one line, slug, Base64, URL encode, word count |
 | ☀️ **Keep awake · Screen off · Lock · Pin window on top** | One-click system helpers |
 
+**Also**
+- **Right-click any file or folder → “Add to Right Panel”** to pin it (Windows; on Windows 11 it lives under *Show more options*)
+- **Built-in updater**: Right Panel checks GitHub once a day and can download and run the new installer for you (*Settings → General*)
+- Only one copy runs at a time
+
 **Make it yours**
 - Drag any tool **between the dock and the More grid**, reorder, hide or show it (also in *Settings → Widgets*)
 - **15 themes** (Midnight, Graphite, Ocean, Grape, Forest, Wine, Espresso, Neon, Sunset, Snow, Sand, Sky, Rose, Mint, Lilac) + custom color

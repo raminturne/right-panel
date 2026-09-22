@@ -22,6 +22,8 @@ use tao::{
 use wry::{WebContext, WebViewBuilder};
 
 const UI: &str = include_str!("ui.html");
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+const REPO: &str = "raminturne/right-panel";
 const WIN_W: f64 = 480.0;
 const WIN_H: f64 = 680.0;
 
@@ -148,6 +150,83 @@ fn add_app(proxy: EventLoopProxy<Ev>) {
     });
 }
 
+/* ---------------- "Add to Right Panel" from the file manager ---------------- */
+/// A second launch (right-click → Add to Right Panel) drops the path here and exits;
+/// the running copy picks it up.
+fn inbox() -> std::path::PathBuf {
+    sys::data_dir().join("inbox.txt")
+}
+
+fn queue_path(path: &str) {
+    use std::io::Write;
+    if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(inbox()) {
+        let _ = writeln!(f, "{path}");
+    }
+}
+
+fn spawn_inbox_watch(proxy: EventLoopProxy<Ev>) {
+    thread::spawn(move || loop {
+        let file = inbox();
+        if let Ok(text) = fs::read_to_string(&file) {
+            let _ = fs::remove_file(&file);
+            for path in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
+                let item = json!({ "path": path, "name": util::display_name(path), "icon": sys::icon_data_uri(path) });
+                if proxy.send_event(Ev::Script(format!("app.appAdded({item})"))).is_err() {
+                    return;
+                }
+            }
+        }
+        thread::sleep(Duration::from_millis(700));
+    });
+}
+
+/* ---------------- updates ---------------- */
+fn newer(latest: &str, current: &str) -> bool {
+    let parts = |v: &str| -> Vec<u32> { v.trim_start_matches('v').split('.').map(|x| x.parse().unwrap_or(0)).collect() };
+    parts(latest) > parts(current)
+}
+
+/// Asks GitHub for the newest release (through curl, which ships with every supported OS).
+fn spawn_update_check(proxy: EventLoopProxy<Ev>, manual: bool) {
+    thread::spawn(move || {
+        let url = format!("https://api.github.com/repos/{REPO}/releases/latest");
+        let out = std::process::Command::new("curl")
+            .args(["-sL", "--max-time", "15", "-H", "Accept: application/vnd.github+json", "-H", "User-Agent: RightPanel", &url])
+            .output();
+        let latest = out.ok().and_then(|o| serde_json::from_slice::<Value>(&o.stdout).ok()).and_then(|v| v["tag_name"].as_str().map(str::to_owned));
+        let info = match latest {
+            Some(tag) => json!({ "latest": tag, "newer": newer(&tag, VERSION), "manual": manual }),
+            None => json!({ "latest": Value::Null, "newer": false, "manual": manual }),
+        };
+        let _ = proxy.send_event(Ev::Script(format!("app.updateInfo({info})")));
+    });
+}
+
+/// Downloads the installer for this platform and hands over to it (the user confirms in the wizard).
+fn install_update(proxy: EventLoopProxy<Ev>) {
+    thread::spawn(move || {
+        let page = format!("https://github.com/{REPO}/releases/latest");
+        if !cfg!(windows) {
+            sys::launch(&page); // macOS / Linux: packages are installed by the system tools
+            return;
+        }
+        let file = std::env::temp_dir().join("RightPanel-Setup.exe");
+        let url = format!("https://github.com/{REPO}/releases/latest/download/RightPanel-Setup.exe");
+        let ok = std::process::Command::new("curl")
+            .args(["-sL", "--max-time", "300", "-o", &file.display().to_string(), &url])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if ok && fs::metadata(&file).map(|m| m.len() > 1_000_000).unwrap_or(false) {
+            let _ = std::process::Command::new(&file).spawn();
+            let _ = proxy.send_event(Ev::Script("app.quitForUpdate()".into()));
+        } else {
+            sys::launch(&page);
+            let _ = proxy.send_event(Ev::Script("app.toast('Could not download the update, opening the page')".into()));
+        }
+    });
+}
+
 /* ---------------- click-through while closed ---------------- */
 /// Closed panel lets clicks through to the apps below. On Linux we instead shrink the input
 /// area to a thin strip at the screen edge: its mouse events open the panel even where the
@@ -230,6 +309,21 @@ mod tray {
 
 
 fn main() {
+    // right-click → "Add to Right Panel" launches us with --add <path>
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(path) = args.iter().position(|a| a == "--add").and_then(|i| args.get(i + 1)) {
+        queue_path(path);
+    }
+    // lets the installer / a script turn the Explorer menu entry on or off
+    if let Some(v) = args.iter().position(|a| a == "--context-menu").and_then(|i| args.get(i + 1)) {
+        sys::set_context_menu(v == "on");
+        return;
+    }
+    if !sys::single_instance() {
+        return; // the copy already running picks the path up from the inbox
+    }
+    let _ = fs::remove_file(inbox()); // stale entries from a previous session
+
     #[cfg(target_os = "linux")]
     {
         // The panel needs edge placement + input shaping, which Wayland (xdg-shell) forbids, so it
@@ -304,7 +398,8 @@ fn main() {
     let mut ctx = WebContext::new(Some(dir.join("webview")));
     let init = format!(
         "window.onerror=(m,s,l)=>window.ipc.postMessage(JSON.stringify({{t:\"log\",text:m+\" @\"+l}}));window.__init = {};",
-        json!({ "settings": settings, "notes": notes, "platform": sys::PLATFORM, "home": sys::home() })
+        json!({ "settings": settings, "notes": notes, "platform": sys::PLATFORM, "home": sys::home(),
+                "version": VERSION, "contextMenu": sys::context_menu_enabled() })
     );
     let ipc_proxy = proxy.clone();
     let wv = WebViewBuilder::new_with_web_context(&mut ctx)
@@ -331,6 +426,7 @@ fn main() {
     };
 
     spawn_clip_watch(proxy.clone());
+    spawn_inbox_watch(proxy.clone());
     spawn_edge_watch(proxy.clone(), x, y, scale, mpos.x + msize.width as i32, h);
     let mut tray: Option<tray::Tray> = None;
 
@@ -457,6 +553,9 @@ fn main() {
                             }
                         });
                     }
+                    "contextMenu" => sys::set_context_menu(m["on"].as_bool().unwrap_or(false)),
+                    "checkUpdate" => spawn_update_check(proxy.clone(), m["manual"].as_bool().unwrap_or(false)),
+                    "installUpdate" => install_update(proxy.clone()),
                     "quit" => *flow = ControlFlow::Exit,
                     _ => {}
                 }

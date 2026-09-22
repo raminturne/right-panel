@@ -329,6 +329,10 @@
       <div class="set"><span id="startLbl">Start with Windows</span><button class="toggle" id="tStartup"></button></div>
       <div class="set" id="pasteRow"><span>Paste on click</span><button class="toggle" id="tPaste"></button></div>
       <div class="set"><span>Magnify icons on hover</span><button class="toggle" id="tMagnify"></button></div>
+      <div class="set" id="ctxRow"><span>Add to right-click menu<small class="hint" style="display:block">Files &amp; folders → “Add to Right Panel”</small></span><button class="toggle" id="tContext"></button></div>
+      <div class="set"><span>Check for updates</span><button class="toggle" id="tUpdates"></button></div>
+      <div class="item plain" id="aboutRow">Right Panel <b id="verNow"></b><small id="updLine">Click to check for updates</small></div>
+      <button class="btn primary" id="updBtn" style="display:none">Download &amp; install update</button>
       <button class="btn" id="quitBtn">Quit Right Panel</button>
     </div>
   </div>
@@ -342,7 +346,7 @@ const send = (t, o = {}) => window.ipc.postMessage(JSON.stringify({ t, ...o }));
 const init = window.__init || {};
 const OS = init.platform || 'windows';   // windows | macos | linux
 const S = Object.assign({ theme: 'midnight', accent: '#000000', startup: false, paste: true, magnify: true, recentEmoji: [], recentColors: [],
-  hidden: [], apps: [], snippets: [], pins: [], engine: 'Google', zones: ['UTC', 'Europe/London', 'America/New_York', 'Asia/Tokyo'] }, init.settings || {});
+  updates: true, lastCheck: 0, hidden: [], apps: [], snippets: [], pins: [], engine: 'Google', zones: ['UTC', 'Europe/London', 'America/New_York', 'Asia/Tokyo'] }, init.settings || {});
 const save = () => send('settings', { settings: S });
 const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -1014,6 +1018,37 @@ if (OS !== 'windows') {
 tog($('#tStartup'), 'startup');
 tog($('#tPaste'), 'paste');
 tog($('#tMagnify'), 'magnify');
+tog($('#tUpdates'), 'updates');
+
+/* ---- right-click menu (Windows) + updates ---- */
+if (OS === 'windows') {
+  $('#tContext').classList.toggle('on', !!init.contextMenu);
+  $('#tContext').onclick = () => { const on = !$('#tContext').classList.contains('on'); $('#tContext').classList.toggle('on', on); send('contextMenu', { on });
+    toast(on ? 'Added to the right-click menu' : 'Removed from the right-click menu'); };
+} else $('#ctxRow').style.display = 'none';
+
+$('#verNow').textContent = 'v' + (init.version || '1.0.0');
+let updateUrl = null;
+function checkUpdates(manual) { $('#updLine').textContent = 'Checking…'; send('checkUpdate', { manual }); S.lastCheck = Date.now(); save(); }
+$('#aboutRow').onclick = () => checkUpdates(true);
+$('#updBtn').onclick = () => { $('#updBtn').textContent = 'Downloading…'; send('installUpdate'); };
+app.updateInfo = info => {
+  const line = $('#updLine');
+  if (!info.latest) { line.textContent = 'Could not reach GitHub'; if (info.manual) toast('Update check failed'); return; }
+  if (info.newer) {
+    line.textContent = `${info.latest} is available`;
+    $('#updBtn').style.display = '';
+    if (info.manual) toast(`Update ${info.latest} available`);
+    else { sticky = true; app.open(); setTimeout(() => openWidget('settings'), 150); toast(`Update ${info.latest} available`); }
+  } else {
+    line.textContent = 'You are on the latest version';
+    $('#updBtn').style.display = 'none';
+    if (info.manual) toast('Right Panel is up to date');
+  }
+};
+app.quitForUpdate = () => { toast('Installing update…'); setTimeout(() => send('quit'), 400); };
+// quiet daily check in the background
+if (S.updates !== false && Date.now() - (S.lastCheck || 0) > 864e5) setTimeout(() => checkUpdates(false), 8000);
 $('#quitBtn').onclick = () => send('quit');
 
 applyTheme();

@@ -11,13 +11,14 @@ use std::{
 
 use crate::util;
 use windows_sys::Win32::{
-    Foundation::{HWND, POINT},
+    Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HWND, POINT},
     Graphics::Gdi::{GetDC, GetPixel, ReleaseDC},
     System::{
         DataExchange::GetClipboardSequenceNumber,
         Diagnostics::Debug::MessageBeep,
         Power::{SetThreadExecutionState, ES_CONTINUOUS, ES_DISPLAY_REQUIRED, ES_SYSTEM_REQUIRED},
-        Registry::{RegDeleteKeyValueW, RegGetValueW, RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ, RRF_RT_REG_SZ},
+        Registry::{RegDeleteKeyValueW, RegDeleteTreeW, RegGetValueW, RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ, RRF_RT_REG_SZ},
+        Threading::CreateMutexW,
         Shutdown::LockWorkStation,
     },
     UI::Input::KeyboardAndMouse::{
@@ -337,3 +338,51 @@ unsafe fn icon_to_rgba(icon: HICON) -> Option<(u32, u32, Vec<u8>)> {
     }
 }
 
+
+/* ---------------- single instance ---------------- */
+/// Only one copy runs at a time; a second launch hands its job over through the inbox file.
+pub fn single_instance() -> bool {
+    let name = wide(r"Local\RightPanelSingleton");
+    unsafe {
+        let h = CreateMutexW(std::ptr::null(), 1, name.as_ptr());
+        if h.is_null() {
+            return true;
+        }
+        if GetLastError() == ERROR_ALREADY_EXISTS {
+            CloseHandle(h);
+            return false;
+        }
+        let _ = h; // the handle stays open for the life of the process, which is what holds the mutex
+        true
+    }
+}
+
+/* ---------------- Explorer right-click menu ---------------- */
+const MENU_KEYS: [&str; 2] = [r"Software\Classes\*\shell\RightPanel", r"Software\Classes\Directory\shell\RightPanel"];
+
+pub fn context_menu_enabled() -> bool {
+    let k = wide(MENU_KEYS[0]);
+    unsafe { RegGetValueW(HKEY_CURRENT_USER, k.as_ptr(), std::ptr::null(), RRF_RT_REG_SZ, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut()) == 0 }
+}
+
+/// Adds "Add to Right Panel" to the right-click menu of files and folders (per user, no admin).
+pub fn set_context_menu(on: bool) {
+    let exe = std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default();
+    for key in MENU_KEYS {
+        let k = wide(key);
+        unsafe {
+            if !on {
+                RegDeleteTreeW(HKEY_CURRENT_USER, k.as_ptr());
+                continue;
+            }
+            let set = |sub: &Vec<u16>, name: *const u16, data: &str| {
+                let d = wide(data);
+                RegSetKeyValueW(HKEY_CURRENT_USER, sub.as_ptr(), name, REG_SZ, d.as_ptr() as *const c_void, (d.len() * 2) as u32);
+            };
+            set(&k, std::ptr::null(), "Add to Right Panel");
+            set(&k, wide("Icon").as_ptr(), &exe);
+            let cmd = wide(&format!(r"{key}\command"));
+            set(&cmd, std::ptr::null(), &format!("\"{exe}\" --add \"%1\""));
+        }
+    }
+}
