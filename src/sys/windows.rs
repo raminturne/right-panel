@@ -11,10 +11,13 @@ use std::{
 
 use crate::util;
 use windows_sys::Win32::{
-    Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HWND, POINT},
-    Graphics::Gdi::{GetDC, GetPixel, ReleaseDC},
+    System::Com::CoTaskMemFree,
+    Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HANDLE, HWND, POINT},
+    Graphics::Gdi::{GetDC, GetPixel, ReleaseDC, BI_BITFIELDS},
     System::{
-        DataExchange::GetClipboardSequenceNumber,
+        DataExchange::{CloseClipboard, EmptyClipboard, GetClipboardData, GetClipboardSequenceNumber, OpenClipboard, SetClipboardData},
+        Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE},
+        Ole::CF_DIB,
         Diagnostics::Debug::MessageBeep,
         Power::{SetThreadExecutionState, ES_CONTINUOUS, ES_DISPLAY_REQUIRED, ES_SYSTEM_REQUIRED},
         Registry::{RegDeleteKeyValueW, RegDeleteTreeW, RegGetValueW, RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ, RRF_RT_REG_SZ},
@@ -237,7 +240,10 @@ use windows_sys::Win32::{
     UI::{
         Controls::Dialogs::{GetOpenFileNameW, OFN_FILEMUSTEXIST, OFN_NODEREFERENCELINKS, OFN_PATHMUSTEXIST, OPENFILENAMEW},
         Controls::{ImageList_GetIcon, HIMAGELIST, ILD_TRANSPARENT},
-        Shell::{SHGetFileInfoW, SHGetImageList, ShellExecuteW, SHFILEINFOW, SHGFI_SYSICONINDEX, SHIL_EXTRALARGE},
+        Shell::{
+            SHBrowseForFolderW, SHGetFileInfoW, SHGetImageList, SHGetPathFromIDListW, ShellExecuteW, BIF_NEWDIALOGSTYLE, BIF_RETURNONLYFSDIRS, BROWSEINFOW,
+            SHFILEINFOW, SHGFI_SYSICONINDEX, SHIL_EXTRALARGE,
+        },
         WindowsAndMessaging::{DestroyIcon, GetIconInfo, PrivateExtractIconsW, HICON, ICONINFO, SW_SHOWNORMAL},
     },
 };
@@ -358,31 +364,142 @@ pub fn single_instance() -> bool {
 }
 
 /* ---------------- Explorer right-click menu ---------------- */
-const MENU_KEYS: [&str; 2] = [r"Software\Classes\*\shell\RightPanel", r"Software\Classes\Directory\shell\RightPanel"];
+// files, folders, drives, and the empty space inside a folder ("%V" = the folder itself)
+const MENU_KEYS: [(&str, &str); 4] = [
+    (r"Software\Classes\*\shell\RightPanel", "%1"),
+    (r"Software\Classes\Directory\shell\RightPanel", "%1"),
+    (r"Software\Classes\Drive\shell\RightPanel", "%1"),
+    (r"Software\Classes\Directory\Background\shell\RightPanel", "%V"),
+];
 
 pub fn context_menu_enabled() -> bool {
-    let k = wide(MENU_KEYS[0]);
+    let k = wide(MENU_KEYS[0].0);
     unsafe { RegGetValueW(HKEY_CURRENT_USER, k.as_ptr(), std::ptr::null(), RRF_RT_REG_SZ, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut()) == 0 }
 }
 
 /// Adds "Add to Right Panel" to the right-click menu of files and folders (per user, no admin).
 pub fn set_context_menu(on: bool) {
     let exe = std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default();
-    for key in MENU_KEYS {
+    for (key, arg) in MENU_KEYS {
         let k = wide(key);
         unsafe {
             if !on {
                 RegDeleteTreeW(HKEY_CURRENT_USER, k.as_ptr());
                 continue;
             }
-            let set = |sub: &Vec<u16>, name: *const u16, data: &str| {
-                let d = wide(data);
+            let set = |sub: &Vec<u16>, name: &str, data: &str| {
+                let (n, d) = (wide(name), wide(data));
+                let name = if name.is_empty() { std::ptr::null() } else { n.as_ptr() };
                 RegSetKeyValueW(HKEY_CURRENT_USER, sub.as_ptr(), name, REG_SZ, d.as_ptr() as *const c_void, (d.len() * 2) as u32);
             };
-            set(&k, std::ptr::null(), "Add to Right Panel");
-            set(&k, wide("Icon").as_ptr(), &exe);
+            set(&k, "", "Add to Right Panel");
+            set(&k, "Icon", &exe);
+            set(&k, "Position", "Top"); // otherwise it lands at the bottom of a crowded menu
             let cmd = wide(&format!(r"{key}\command"));
-            set(&cmd, std::ptr::null(), &format!("\"{exe}\" --add \"%1\""));
+            set(&cmd, "", &format!("\"{exe}\" --add \"{arg}\""));
         }
+    }
+}
+
+/* ---------------- clipboard images ---------------- */
+/// Reads a bitmap off the clipboard as (width, height, RGBA).
+pub fn clip_image() -> Option<(u32, u32, Vec<u8>)> {
+    unsafe {
+        if OpenClipboard(std::ptr::null_mut()) == 0 {
+            return None;
+        }
+        let h = GetClipboardData(CF_DIB as u32);
+        let out = (!h.is_null()).then(|| dib_to_rgba(h as *const u8)).flatten();
+        CloseClipboard();
+        out
+    }
+}
+
+unsafe fn dib_to_rgba(dib: *const u8) -> Option<(u32, u32, Vec<u8>)> {
+    unsafe {
+        let head = &*(dib as *const BITMAPINFOHEADER);
+        let (w, h) = (head.biWidth, head.biHeight);
+        if w <= 0 || h == 0 || w > 10_000 || h.abs() > 10_000 || head.biBitCount < 24 {
+            return None;
+        }
+        let (w, flip, rows) = (w as u32, h > 0, h.unsigned_abs());
+        let bpp = (head.biBitCount / 8) as usize;
+        let stride = ((w as usize * bpp) + 3) & !3;
+        let masks = if head.biCompression == BI_BITFIELDS { 12 } else { 0 };
+        let pixels = dib.add(head.biSize as usize + masks + head.biClrUsed as usize * 4);
+        let mut out = vec![0u8; (w * rows * 4) as usize];
+        for y in 0..rows as usize {
+            let src_row = if flip { rows as usize - 1 - y } else { y };
+            let src = pixels.add(src_row * stride);
+            for x in 0..w as usize {
+                let p = src.add(x * bpp);
+                let i = (y * w as usize + x) * 4;
+                out[i] = *p.add(2);
+                out[i + 1] = *p.add(1);
+                out[i + 2] = *p;
+                out[i + 3] = if bpp == 4 { (*p.add(3)).max(1) } else { 255 };
+            }
+        }
+        Some((w, rows, out))
+    }
+}
+
+/// Puts an image back on the clipboard (as a 32-bit DIB, which every app understands).
+pub fn set_clip_image(w: u32, h: u32, rgba: &[u8]) -> bool {
+    let header = std::mem::size_of::<BITMAPINFOHEADER>();
+    let mut buf = vec![0u8; header + (w * h * 4) as usize];
+    unsafe {
+        let head = &mut *(buf.as_mut_ptr() as *mut BITMAPINFOHEADER);
+        head.biSize = header as u32;
+        head.biWidth = w as i32;
+        head.biHeight = h as i32; // positive: rows bottom-up
+        head.biPlanes = 1;
+        head.biBitCount = 32;
+        head.biCompression = BI_RGB;
+        head.biSizeImage = w * h * 4;
+        for y in 0..h as usize {
+            let src = (h as usize - 1 - y) * w as usize * 4;
+            for x in 0..w as usize {
+                let (s, d) = (src + x * 4, header + (y * w as usize + x) * 4);
+                buf[d] = rgba[s + 2];
+                buf[d + 1] = rgba[s + 1];
+                buf[d + 2] = rgba[s];
+                buf[d + 3] = rgba[s + 3];
+            }
+        }
+        let mem = GlobalAlloc(GMEM_MOVEABLE, buf.len());
+        if mem.is_null() {
+            return false;
+        }
+        let dst = GlobalLock(mem);
+        std::ptr::copy_nonoverlapping(buf.as_ptr(), dst as *mut u8, buf.len());
+        GlobalUnlock(mem);
+        if OpenClipboard(std::ptr::null_mut()) == 0 {
+            return false;
+        }
+        EmptyClipboard();
+        // on success the clipboard owns the block; on failure Windows frees it when we exit
+        let ok = !SetClipboardData(CF_DIB as u32, mem as HANDLE).is_null();
+        CloseClipboard();
+        ok
+    }
+}
+
+/// Folder picker (the classic browse dialog: small and dependency-free).
+pub fn pick_folder() -> Option<String> {
+    let title = wide("Add a folder to Right Panel");
+    unsafe {
+        let mut bi: BROWSEINFOW = std::mem::zeroed();
+        bi.lpszTitle = title.as_ptr();
+        bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+        let list = SHBrowseForFolderW(&mut bi);
+        if list.is_null() {
+            return None;
+        }
+        let mut buf = [0u16; 520];
+        let ok = SHGetPathFromIDListW(list, buf.as_mut_ptr()) != 0;
+        CoTaskMemFree(list as *const c_void);
+        let len = buf.iter().position(|&c| c == 0).unwrap_or(0);
+        ok.then(|| String::from_utf16_lossy(&buf[..len]))
     }
 }

@@ -84,3 +84,32 @@ pub fn tray_rgba() -> Vec<u8> {
     }
     px
 }
+
+/// Cheap stable hash, used to spot a clipboard image we already have.
+pub fn hash(bytes: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for chunk in bytes.chunks(97) {
+        for &b in chunk {
+            h = (h ^ b as u64).wrapping_mul(0x100000001b3);
+        }
+    }
+    h ^ bytes.len() as u64
+}
+
+/// Nearest-neighbour downscale so the UI can show a small preview.
+pub fn thumbnail(w: u32, h: u32, rgba: &[u8], max: u32) -> (u32, u32, Vec<u8>) {
+    if w <= max && h <= max {
+        return (w, h, rgba.to_vec());
+    }
+    let scale = (max as f32 / w.max(h) as f32).min(1.0);
+    let (tw, th) = (((w as f32 * scale) as u32).max(1), ((h as f32 * scale) as u32).max(1));
+    let mut out = vec![0u8; (tw * th * 4) as usize];
+    for y in 0..th {
+        for x in 0..tw {
+            let src = ((y * h / th) as usize * w as usize + (x * w / tw) as usize) * 4;
+            let dst = ((y * tw + x) * 4) as usize;
+            out[dst..dst + 4].copy_from_slice(&rgba[src..src + 4]);
+        }
+    }
+    (tw, th, out)
+}

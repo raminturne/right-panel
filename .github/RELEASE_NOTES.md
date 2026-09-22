@@ -7,10 +7,12 @@
 | **macOS** *(beta)* | `RightPanel-macos-arm64.dmg` (Apple Silicon) · `RightPanel-macos-x64.dmg` (Intel). Right-click → Open the first time |
 | **Linux** *(beta)* | `RightPanel-linux-amd64.deb` · `RightPanel-linux-x64.tar.gz` (X11 + WebKitGTK 4.1) |
 
-### New in 1.1.0
-- **Right-click → “Add to Right Panel”** on any file or folder (Windows)
-- **Built-in update check** with one-click install (*Settings → General*)
-- Single instance: launching it twice no longer opens a second panel
+### New in 1.2.0
+- **Drag files and folders onto the panel** to pin them
+- **Clipboard history now keeps images**, with ★ pins that survive a restart
+- **Pick the edge** (left or right) and the **monitor** the panel lives on
+- **Several notes** in tabs instead of one
+- Settings can add a **folder** as well as an app
 
 ### What's inside
 Emoji picker · clipboard history with pins · color picker & eyedropper · screenshot · notes · pinned apps · web search · snippets · calculator · units · password & generators · timer · stopwatch · world clock · media keys · text tools · keep awake · screen off · lock · pin window on top.

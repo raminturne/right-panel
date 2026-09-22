@@ -39,11 +39,11 @@ Move your mouse to the right edge and it pours out: emoji, clipboard history, co
 | | |
 |---|---|
 | 😊 **Emoji picker** | Search, categories, recents. Click to type it straight into the app you were using |
-| 📋 **Clipboard history** | Last 50 copies, search, ☆ pin favorites that survive restarts |
+| 📋 **Clipboard history** | Text *and images*, search, ☆ pin favourites that survive restarts |
 | 🎨 **Color** | Eyedropper (pick any pixel on screen), HEX / RGB / HSL, palette, recent colors |
 | 📸 **Screenshot** | Opens the system snipping tool |
-| 📝 **Note** | A scratchpad that saves as you type |
-| 🧩 **Your apps** | Pin any app or shortcut, with its real icon, like a second taskbar |
+| 📝 **Notes** | As many notes as you like, in tabs, saved as you type |
+| 🧩 **Your apps & folders** | Pin apps, shortcuts or folders — add them in Settings or just **drag them onto the panel** |
 | 🔎 **Search** | Google, YouTube, Wikipedia, Translate, Maps, GitHub… or just type a URL |
 | ✂️ **Snippets** | Save text you type often, paste it with one click |
 | 🧮 **Calculator · Units · Password · Generate** | Quick math, unit conversions, strong passwords, UUIDs, dates, lorem ipsum |
@@ -53,7 +53,8 @@ Move your mouse to the right edge and it pours out: emoji, clipboard history, co
 | ☀️ **Keep awake · Screen off · Lock · Pin window on top** | One-click system helpers |
 
 **Also**
-- **Right-click any file or folder → “Add to Right Panel”** to pin it (Windows; on Windows 11 it lives under *Show more options*)
+- **Drag a file or folder onto the panel** to pin it, or right-click it → *Add to Right Panel* (Windows; on Windows 11 under *Show more options*)
+- **Left or right edge**, and pick which monitor it lives on (*Settings → General*)
 - **Built-in updater**: Right Panel checks GitHub once a day and can download and run the new installer for you (*Settings → General*)
 - Only one copy runs at a time
 

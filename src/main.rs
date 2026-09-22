@@ -4,7 +4,10 @@
 
 use std::{
     fs,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering},
+        Mutex,
+    },
     thread,
     time::Duration,
 };
@@ -29,6 +32,17 @@ const WIN_H: f64 = 680.0;
 
 static OPEN: AtomicBool = AtomicBool::new(false);
 static PICKING: AtomicBool = AtomicBool::new(false);
+/// Where the panel currently lives, so the hover watcher follows moves between edges / monitors.
+static PANEL_X: AtomicI32 = AtomicI32::new(0);
+static PANEL_Y: AtomicI32 = AtomicI32::new(0);
+static PANEL_H: AtomicI32 = AtomicI32::new(0);
+static EDGE_X: AtomicI32 = AtomicI32::new(0);
+static ON_LEFT: AtomicBool = AtomicBool::new(false);
+/// Recent clipboard images, newest last. Thumbnails go to the UI; the pixels stay here.
+static IMAGES: Mutex<Vec<(u64, u32, u32, Vec<u8>)>> = Mutex::new(Vec::new());
+/// Pinned images are also kept on disk, so they come back after a restart.
+static PINNED: Mutex<Vec<(u64, u32, u32, Vec<u8>)>> = Mutex::new(Vec::new());
+static LAST_IMAGE: AtomicU64 = AtomicU64::new(0);
 
 enum Ev {
     Script(String),
@@ -85,9 +99,18 @@ fn spawn_clip_watch(proxy: EventLoopProxy<Ev>) {
             let s = sys::clip_seq();
             if s != seq {
                 seq = s;
-                if let Some(t) = get_clip() {
-                    if t.len() < 100_000 && proxy.send_event(Ev::Script(format!("app.clip({})", json!(t)))).is_err() {
-                        return;
+                match get_clip() {
+                    Some(t) if !t.trim().is_empty() => {
+                        if t.len() < 100_000 && proxy.send_event(Ev::Script(format!("app.clip({})", json!(t)))).is_err() {
+                            return;
+                        }
+                    }
+                    _ => {
+                        if let Some(script) = take_clip_image() {
+                            if proxy.send_event(Ev::Script(script)).is_err() {
+                                return;
+                            }
+                        }
                     }
                 }
             }
@@ -96,11 +119,84 @@ fn spawn_clip_watch(proxy: EventLoopProxy<Ev>) {
     });
 }
 
+/// Copies a new clipboard image into the history and returns the call that shows its thumbnail.
+fn take_clip_image() -> Option<String> {
+    let (w, h, rgba) = sys::clip_image()?;
+    let id = util::hash(&rgba) ^ ((w as u64) << 32) ^ h as u64;
+    if LAST_IMAGE.swap(id, Ordering::Relaxed) == id {
+        return None;
+    }
+    let call = image_call(id, w, h, &rgba, false);
+    let mut images = IMAGES.lock().ok()?;
+    images.retain(|(other, ..)| *other != id);
+    images.push((id, w, h, rgba));
+    if images.len() > 8 {
+        images.remove(0);
+    }
+    Some(call)
+}
+
+/* ---------------- pinned clipboard images ---------------- */
+fn pins_dir() -> std::path::PathBuf {
+    let dir = sys::data_dir().join("pinned");
+    let _ = fs::create_dir_all(&dir);
+    dir
+}
+
+fn image_call(id: u64, w: u32, h: u32, rgba: &[u8], pinned: bool) -> String {
+    let (tw, th, thumb) = util::thumbnail(w, h, rgba, 240);
+    let uri = format!("data:image/png;base64,{}", util::base64(&util::png(tw, th, &thumb)));
+    format!("app.clipImage({})", json!({ "id": id.to_string(), "w": w, "h": h, "thumb": uri, "pinned": pinned }))
+}
+
+fn pin_image(id: u64, on: bool) -> bool {
+    let file = pins_dir().join(format!("{id}.bin"));
+    if !on {
+        let _ = fs::remove_file(file);
+        return PINNED.lock().map(|mut v| v.retain(|(i, ..)| *i != id)).is_ok();
+    }
+    let Some((_, w, h, px)) = IMAGES.lock().ok().and_then(|v| v.iter().find(|(i, ..)| *i == id).cloned()) else { return false };
+    let (w, h, px) = util::thumbnail(w, h, &px, 1600); // keep the saved copy reasonable
+    let mut body = Vec::with_capacity(px.len() + 8);
+    body.extend_from_slice(&w.to_le_bytes());
+    body.extend_from_slice(&h.to_le_bytes());
+    body.extend_from_slice(&px);
+    if fs::write(file, body).is_err() {
+        return false;
+    }
+    PINNED.lock().map(|mut v| v.push((id, w, h, px))).is_ok()
+}
+
+/// Shows pinned images again when the app starts.
+fn restore_pins(proxy: EventLoopProxy<Ev>) {
+    thread::spawn(move || {
+        let Ok(entries) = fs::read_dir(pins_dir()) else { return };
+        for entry in entries.flatten().take(12) {
+            let Some(id) = entry.path().file_stem().and_then(|s| s.to_str()).and_then(|s| s.parse::<u64>().ok()) else { continue };
+            let Ok(body) = fs::read(entry.path()) else { continue };
+            if body.len() < 8 {
+                continue;
+            }
+            let w = u32::from_le_bytes(body[0..4].try_into().unwrap());
+            let h = u32::from_le_bytes(body[4..8].try_into().unwrap());
+            let px = body[8..].to_vec();
+            if px.len() as u32 != w * h * 4 {
+                continue;
+            }
+            let _ = proxy.send_event(Ev::Script(image_call(id, w, h, &px, true)));
+            if let Ok(mut v) = PINNED.lock() {
+                v.push((id, w, h, px));
+            }
+        }
+    });
+}
+
 /* ---------------- edge hover detection ---------------- */
-fn spawn_edge_watch(proxy: EventLoopProxy<Ev>, win_x: i32, win_y: i32, scale: f64, edge: i32, h: i32) {
+fn spawn_edge_watch(proxy: EventLoopProxy<Ev>, scale: f64) {
     thread::spawn(move || {
         let mut near = false;
         let mut last = (i32::MIN, i32::MIN);
+        let mut held = 0u32;
         loop {
             thread::sleep(Duration::from_millis(12));
             if OPEN.load(Ordering::Relaxed) || PICKING.load(Ordering::Relaxed) {
@@ -108,25 +204,28 @@ fn spawn_edge_watch(proxy: EventLoopProxy<Ev>, win_x: i32, win_y: i32, scale: f6
                 continue;
             }
             let Some((px, py)) = sys::cursor_pos() else { continue };
+            let (win_y, h, edge) = (PANEL_Y.load(Ordering::Relaxed), PANEL_H.load(Ordering::Relaxed), EDGE_X.load(Ordering::Relaxed));
+            let left = ON_LEFT.load(Ordering::Relaxed);
             let moved = (px, py) != last;
             last = (px, py);
             let in_band = py >= win_y && py < win_y + h;
-            let dist = edge - 1 - px;
-            if moved && in_band && (0..=1).contains(&dist) && !sys::left_down() {
+            let dist = if left { px - edge } else { edge - 1 - px };
+            // a held button usually means dragging something: wait until it rests on the edge
+            let dragging = sys::left_down();
+            held = if dragging && in_band && (0..=1).contains(&dist) { held + 1 } else { 0 };
+            if moved && in_band && (0..=1).contains(&dist) && (!dragging || held > 30) {
                 sys::remember_foreground();
                 OPEN.store(true, Ordering::Relaxed);
                 let _ = proxy.send_event(Ev::Open);
                 near = false;
             } else if in_band && dist >= 0 && dist < (160.0 * scale) as i32 {
                 near = true;
-                let lx = (px - win_x) as f64 / scale;
-                let ly = (py - win_y) as f64 / scale;
-                if proxy.send_event(Ev::Script(format!("app.cursor({lx:.1},{ly:.1})"))).is_err() {
+                if proxy.send_event(Ev::Script(format!("app.cursor({:.1})", dist as f64 / scale))).is_err() {
                     return;
                 }
             } else if near {
                 near = false;
-                let _ = proxy.send_event(Ev::Script("app.cursor(-1,0)".into()));
+                let _ = proxy.send_event(Ev::Script("app.cursor(-1)".into()));
             }
         }
     });
@@ -140,9 +239,9 @@ fn log(msg: &str) {
 }
 
 /// File picker runs on its own thread so the panel keeps animating.
-fn add_app(proxy: EventLoopProxy<Ev>) {
+fn add_app(proxy: EventLoopProxy<Ev>, folder: bool) {
     thread::spawn(move || {
-        if let Some(path) = sys::pick_file() {
+        if let Some(path) = if folder { sys::pick_folder() } else { sys::pick_file() } {
             let item = json!({ "path": path, "name": util::display_name(&path), "icon": sys::icon_data_uri(&path) });
             let _ = proxy.send_event(Ev::Script(format!("app.appAdded({item})")));
             let _ = proxy.send_event(Ev::Show("settings"));
@@ -225,6 +324,42 @@ fn install_update(proxy: EventLoopProxy<Ev>) {
             let _ = proxy.send_event(Ev::Script("app.toast('Could not download the update, opening the page')".into()));
         }
     });
+}
+
+/* ---------------- where the panel sits ---------------- */
+struct Screen {
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    name: String,
+}
+
+fn screens(event_loop: &tao::event_loop::EventLoop<Ev>) -> Vec<Screen> {
+    event_loop
+        .available_monitors()
+        .enumerate()
+        .map(|(i, m)| {
+            let (p, s) = (m.position(), m.size());
+            Screen { x: p.x, y: p.y, w: s.width as i32, h: s.height as i32, name: m.name().unwrap_or_else(|| format!("Monitor {}", i + 1)) }
+        })
+        .collect()
+}
+
+/// Moves the panel to the chosen edge of the chosen screen and tells the hover watcher about it.
+fn place(window: &tao::window::Window, screens: &[Screen], idx: usize, left: bool, scale: f64) -> (i32, i32) {
+    let s = screens.get(idx).or_else(|| screens.first()).expect("no monitor");
+    let w = (WIN_W * scale) as i32;
+    let h = ((WIN_H * scale) as i32).min(s.h);
+    let x = if left { s.x } else { s.x + s.w - w };
+    let y = s.y + (s.h - h) / 2;
+    window.set_outer_position(PhysicalPosition::new(x, y));
+    PANEL_X.store(x, Ordering::Relaxed);
+    PANEL_Y.store(y, Ordering::Relaxed);
+    PANEL_H.store(h, Ordering::Relaxed);
+    EDGE_X.store(if left { s.x } else { s.x + s.w }, Ordering::Relaxed);
+    ON_LEFT.store(left, Ordering::Relaxed);
+    (w, h)
 }
 
 /* ---------------- click-through while closed ---------------- */
@@ -314,6 +449,18 @@ fn main() {
     if let Some(path) = args.iter().position(|a| a == "--add").and_then(|i| args.get(i + 1)) {
         queue_path(path);
     }
+    // debug helper: write whatever image is on the clipboard to a PNG
+    if let Some(out) = args.iter().position(|a| a == "--dump-clip-image").and_then(|i| args.get(i + 1)) {
+        match sys::clip_image() {
+            Some((w, h, px)) => {
+                let _ = fs::write(out, util::png(w, h, &px));
+                println!("{w}x{h} written to {out}");
+            }
+            None => println!("no image on the clipboard"),
+        }
+        return;
+    }
+
     // lets the installer / a script turn the Explorer menu entry on or off
     if let Some(v) = args.iter().position(|a| a == "--context-menu").and_then(|i| args.get(i + 1)) {
         sys::set_context_menu(v == "on");
@@ -338,7 +485,15 @@ fn main() {
 
     let mut settings: Value = fs::read_to_string(&settings_path).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_else(|| json!({}));
     settings["startup"] = json!(sys::startup_enabled());
-    let notes = fs::read_to_string(&notes_path).unwrap_or_default();
+    let notes_json = dir.join("notes.json");
+    let notes: Value = fs::read_to_string(&notes_json)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_else(|| match fs::read_to_string(&notes_path) {
+            // carry the single note from older versions into the new list
+            Ok(old) if !old.trim().is_empty() => json!([{ "id": "note-1", "title": "Note", "text": old }]),
+            _ => json!([]),
+        });
 
     #[allow(unused_mut)]
     let mut event_loop = EventLoopBuilder::<Ev>::with_user_event().build();
@@ -352,11 +507,16 @@ fn main() {
     let monitor = event_loop.primary_monitor().or_else(|| event_loop.available_monitors().next()).expect("no monitor");
     let scale = monitor.scale_factor();
     sys::set_scale(scale);
-    let (mpos, msize) = (monitor.position(), monitor.size());
-    let (w, h) = ((WIN_W * scale) as i32, (WIN_H * scale).min(msize.height as f64) as i32);
-    let x = mpos.x + msize.width as i32 - w;
-    let y = mpos.y + (msize.height as i32 - h) / 2;
-
+    let all_screens = screens(&event_loop);
+    let on_left = settings["edge"] == "left";
+    let mut screen_idx = settings["monitor"].as_u64().unwrap_or(0) as usize;
+    if screen_idx >= all_screens.len() {
+        screen_idx = 0;
+    }
+    let home = all_screens.get(screen_idx).or_else(|| all_screens.first()).expect("no monitor");
+    let (w, h) = ((WIN_W * scale) as i32, ((WIN_H * scale) as i32).min(home.h));
+    let x = if on_left { home.x } else { home.x + home.w - w };
+    let y = home.y + (home.h - h) / 2;
 
     let builder = WindowBuilder::new()
         .with_title("Right Panel")
@@ -399,10 +559,34 @@ fn main() {
     let init = format!(
         "window.onerror=(m,s,l)=>window.ipc.postMessage(JSON.stringify({{t:\"log\",text:m+\" @\"+l}}));window.__init = {};",
         json!({ "settings": settings, "notes": notes, "platform": sys::PLATFORM, "home": sys::home(),
-                "version": VERSION, "contextMenu": sys::context_menu_enabled() })
+                "version": VERSION, "contextMenu": sys::context_menu_enabled(),
+                "screens": all_screens.iter().map(|s| json!({ "name": s.name, "w": s.w, "h": s.h })).collect::<Vec<_>>() })
     );
     let ipc_proxy = proxy.clone();
+    let drop_proxy = proxy.clone();
     let wv = WebViewBuilder::new_with_web_context(&mut ctx)
+        // dropping a file or folder on the panel pins it (this replaces WebView2's own
+        // drag handling on Windows, so the UI reorders with pointer events instead)
+        .with_drag_drop_handler(move |e| {
+            match e {
+                wry::DragDropEvent::Enter { .. } => {
+                    let _ = drop_proxy.send_event(Ev::Script("app.dropHint(true)".into()));
+                }
+                wry::DragDropEvent::Leave => {
+                    let _ = drop_proxy.send_event(Ev::Script("app.dropHint(false)".into()));
+                }
+                wry::DragDropEvent::Drop { paths, .. } => {
+                    let _ = drop_proxy.send_event(Ev::Script("app.dropHint(false)".into()));
+                    for path in paths {
+                        let p = path.display().to_string();
+                        let item = json!({ "path": p, "name": util::display_name(&p), "icon": sys::icon_data_uri(&p) });
+                        let _ = drop_proxy.send_event(Ev::Script(format!("app.appAdded({item})")));
+                    }
+                }
+                _ => {}
+            }
+            true
+        })
         .with_transparent(true)
         .with_background_color((0, 0, 0, 0))
         .with_initialization_script(&init)
@@ -427,7 +611,9 @@ fn main() {
 
     spawn_clip_watch(proxy.clone());
     spawn_inbox_watch(proxy.clone());
-    spawn_edge_watch(proxy.clone(), x, y, scale, mpos.x + msize.width as i32, h);
+    restore_pins(proxy.clone());
+    place(&window, &all_screens, screen_idx, on_left, scale);
+    spawn_edge_watch(proxy.clone(), scale);
     let mut tray: Option<tray::Tray> = None;
 
     event_loop.run(move |event, _, flow| {
@@ -460,7 +646,7 @@ fn main() {
                 "settings" => {
                     let _ = proxy.send_event(Ev::Show("settings"));
                 }
-                "addapp" => add_app(proxy.clone()),
+                "addapp" => add_app(proxy.clone(), false),
                 "startup" => {
                     let on = !sys::startup_enabled();
                     sys::set_startup(on);
@@ -501,7 +687,7 @@ fn main() {
                         }
                     }
                     "note" => {
-                        let _ = fs::write(&notes_path, s("text"));
+                        let _ = fs::write(&notes_json, m["notes"].to_string());
                     }
                     "settings" => {
                         let st = &m["settings"];
@@ -536,7 +722,7 @@ fn main() {
                         set_passthrough(&window, false);
                     }
                     "log" => log(&s("text")),
-                    "addApp" => add_app(proxy.clone()),
+                    "addApp" => add_app(proxy.clone(), m["folder"].as_bool().unwrap_or(false)),
                     "launch" | "open" => sys::launch(&s(if m["t"] == "open" { "target" } else { "path" })),
                     "key" => sys::press(&s("name")),
                     "screenoff" => sys::screen_off(),
@@ -554,6 +740,30 @@ fn main() {
                         });
                     }
                     "contextMenu" => sys::set_context_menu(m["on"].as_bool().unwrap_or(false)),
+                    "placement" => {
+                        let left = m["edge"] == "left";
+                        let idx = m["monitor"].as_u64().unwrap_or(0) as usize;
+                        place(&window, &all_screens, idx, left, scale);
+                        let _ = webview.evaluate_script(&format!("app.placed({})", json!({ "edge": if left { "left" } else { "right" } })));
+                    }
+                    "pinImage" => {
+                        let id: u64 = s("id").parse().unwrap_or(0);
+                        let on = m["on"].as_bool().unwrap_or(false);
+                        let ok = pin_image(id, on);
+                        let msg = if !ok { "Could not pin that image" } else if on { "Image pinned" } else { "Image unpinned" };
+                        let _ = webview.evaluate_script(&format!("app.toast({})", json!(msg)));
+                    }
+                    "clipImage" => {
+                        let id: u64 = s("id").parse().unwrap_or(0);
+                        let found = IMAGES
+                            .lock()
+                            .ok()
+                            .and_then(|v| v.iter().find(|(i, ..)| *i == id).cloned())
+                            .or_else(|| PINNED.lock().ok().and_then(|v| v.iter().find(|(i, ..)| *i == id).cloned()));
+                        let ok = found.map(|(_, w, h, px)| sys::set_clip_image(w, h, &px)).unwrap_or(false);
+                        LAST_IMAGE.store(id, Ordering::Relaxed); // don't re-announce our own copy
+                        let _ = webview.evaluate_script(if ok { "app.toast('Image copied')" } else { "app.toast('Could not copy that image')" });
+                    }
                     "checkUpdate" => spawn_update_check(proxy.clone(), m["manual"].as_bool().unwrap_or(false)),
                     "installUpdate" => install_update(proxy.clone()),
                     "quit" => *flow = ControlFlow::Exit,

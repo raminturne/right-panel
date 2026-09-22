@@ -187,6 +187,30 @@
   .theme.on i { box-shadow: 0 0 0 2px var(--liquid), 0 0 0 4px var(--inv); }
   .theme input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; }
 
+  /* left-edge mirror */
+  body.left .tab-ui { left: 0; right: auto; border-radius: 0 26px 26px 0; transform-origin: left center; box-shadow: 18px 0 40px -20px rgba(0,0,0,.35); }
+  body.left .tab-ui::before, body.left .tab-ui::after { left: 0; right: auto; }
+  body.left .tab-ui::before { background: radial-gradient(circle at 100% 0, transparent calc(var(--f, 26px) - .5px), var(--liquid) var(--f, 26px)); }
+  body.left .tab-ui::after { background: radial-gradient(circle at 100% 100%, transparent calc(var(--f, 26px) - .5px), var(--liquid) var(--f, 26px)); }
+  body.left .fly-ui { left: calc(var(--w) + 12px); right: auto; transform-origin: left center; }
+  body.left .item:hover { transform: translateX(4px); }
+  body.left .toast { left: 100px; right: auto; }
+  body.left .drop-hint { left: 10px; right: auto; }
+
+  /* dropping files from the file manager */
+  .drop-hint { position: fixed; top: 12px; bottom: 12px; right: 10px; left: auto; width: 330px; border: 2px dashed var(--inv); border-radius: 26px; background: color-mix(in srgb, var(--liquid) 88%, transparent);
+    display: none; place-items: center; text-align: center; padding: 20px; font-size: 15px; color: var(--ink); z-index: 5; }
+  .drop-hint.on { display: grid; animation: rise .3s var(--pop) both; }
+  .drop-hint b { display: block; font-size: 30px; margin-bottom: 8px; }
+
+  /* clipboard images */
+  .item.shot { padding: 8px 8px 8px 8px; }
+  .item.shot img { display: block; width: 100%; max-height: 120px; object-fit: contain; border-radius: 8px; background: var(--soft2); }
+  .item.shot small { margin-top: 6px; }
+
+  /* dragging a widget with the pointer */
+  .drag-ghost { position: fixed; z-index: 99; pointer-events: none; opacity: .9; transform: translate(-50%, -50%) scale(1.06); filter: drop-shadow(0 10px 20px rgba(0,0,0,.45)); }
+
   .toast { position: fixed; right: 100px; bottom: 20px; background: var(--liquid); color: var(--ink); padding: 8px 14px; border-radius: 999px; font-size: 12px; opacity: 0; transform: translateY(16px) scale(.8);
     transition: opacity .25s, transform .55s var(--pop); pointer-events: none; box-shadow: 0 0 0 1px var(--line), 0 10px 30px -10px rgba(0,0,0,.5); }
   .toast.show { opacity: 1; transform: none; }
@@ -231,9 +255,10 @@
   </div>
 
   <div class="panel" data-name="note">
-    <div class="head"><button class="back">←</button><h4>Note</h4><span class="link" id="noteInfo">saved</span></div>
+    <div class="head"><button class="back">←</button><h4>Notes</h4><span class="link" id="noteInfo">saved</span></div>
+    <div class="chips" id="noteTabs"></div>
     <textarea class="field scroll" id="note" placeholder="Write something…"></textarea>
-    <div class="row"><button class="btn" id="noteCopy">Copy all</button><button class="btn" id="noteClear">Clear</button></div>
+    <div class="row"><button class="btn" id="noteNew">＋ New</button><button class="btn" id="noteCopy">Copy</button><button class="btn" id="noteDel">Delete</button></div>
   </div>
 
   <div class="panel" data-name="more">
@@ -317,7 +342,7 @@
   <div class="panel" data-name="settings">
     <div class="tabs" id="stabs"><button data-p="widgets" class="on">Widgets</button><button data-p="look">Theme</button><button data-p="general">General</button></div>
     <div class="spage on" data-p="widgets">
-      <div class="wsec"><span>In the dock</span><button class="link" id="addApp">＋ Add app</button></div>
+      <div class="wsec"><span>In the dock</span><span><button class="link" id="addApp">＋ App</button><button class="link" id="addFolder">＋ Folder</button></span></div>
       <div class="wlist scroll" id="wDock" data-zone="dock" style="max-height:190px"></div>
       <div class="wsec"><span>Inside More</span></div>
       <div class="wlist scroll" id="wMore" data-zone="more" style="max-height:170px"></div>
@@ -329,6 +354,8 @@
       <div class="set"><span id="startLbl">Start with Windows</span><button class="toggle" id="tStartup"></button></div>
       <div class="set" id="pasteRow"><span>Paste on click</span><button class="toggle" id="tPaste"></button></div>
       <div class="set"><span>Magnify icons on hover</span><button class="toggle" id="tMagnify"></button></div>
+      <div class="set"><span>Panel edge</span><select class="field" id="edgeSel" style="width:auto"><option value="right">Right</option><option value="left">Left</option></select></div>
+      <div class="set" id="monRow"><span>Monitor</span><select class="field" id="monSel" style="width:auto"></select></div>
       <div class="set" id="ctxRow"><span>Add to right-click menu<small class="hint" style="display:block">Files &amp; folders → “Add to Right Panel”</small></span><button class="toggle" id="tContext"></button></div>
       <div class="set"><span>Check for updates</span><button class="toggle" id="tUpdates"></button></div>
       <div class="item plain" id="aboutRow">Right Panel <b id="verNow"></b><small id="updLine">Click to check for updates</small></div>
@@ -338,6 +365,7 @@
   </div>
 </div>
 
+<div class="drop-hint" id="dropHint"><span><b>＋</b>Drop to add to Right Panel</span></div>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -346,11 +374,13 @@ const send = (t, o = {}) => window.ipc.postMessage(JSON.stringify({ t, ...o }));
 const init = window.__init || {};
 const OS = init.platform || 'windows';   // windows | macos | linux
 const S = Object.assign({ theme: 'midnight', accent: '#000000', startup: false, paste: true, magnify: true, recentEmoji: [], recentColors: [],
-  updates: true, lastCheck: 0, hidden: [], apps: [], snippets: [], pins: [], engine: 'Google', zones: ['UTC', 'Europe/London', 'America/New_York', 'Asia/Tokyo'] }, init.settings || {});
+  edge: 'right', monitor: 0, updates: true, lastCheck: 0, hidden: [], apps: [], snippets: [], pins: [], engine: 'Google', zones: ['UTC', 'Europe/London', 'America/New_York', 'Asia/Tokyo'] }, init.settings || {});
 const save = () => send('settings', { settings: S });
 const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const I = p => `<svg viewBox="0 0 24 24">${p}</svg>`;
+let DIR = 1;   // 1 = panel on the right edge, -1 = on the left
+const atEdge = x => DIR > 0 ? x >= innerWidth - 6 : x <= 6;
 
 /* ================= widget registry ================= */
 // kind: panel = opens a flyout, action = runs immediately
@@ -447,7 +477,7 @@ const slide = new Spring(0, 320, 38);                       // critically damped
 const grow = new Spring(0, 340, 24), fy = new Spring(innerHeight / 2, 380, 30);
 const pillY = new Spring(0, 420, 26), pillS = new Spring(0, 380, 22);
 
-let isOpen = false, panel = null, sub = false, anchorY = innerHeight / 2, mx = -1, outT, openedAt = -1e9, closedAt = -1e9, sticky = false, hoverY = null, dragging = null;
+let isOpen = false, panel = null, sub = false, anchorY = innerHeight / 2, mx = -1, outT, openedAt = -1e9, closedAt = -1e9, sticky = false, hoverY = null;
 
 const app = window.app = {
   open() { if (isOpen) return; isOpen = true; openedAt = performance.now(); },
@@ -455,7 +485,7 @@ const app = window.app = {
     if (!isOpen) return; isOpen = false; sticky = false; closedAt = performance.now(); setPanel(null); mx = -1; hoverY = null;
     document.activeElement?.blur(); send('pass', { on: true });
   },
-  cursor(x) { mx = x; },
+  cursor(dist) { mx = dist; },   // distance in px from the screen edge, -1 = away
   show(name) { sticky = true; app.open(); if (name) setTimeout(() => openWidget(name), 140); },
   appAdded(it) {
     const id = 'app-' + Date.now();
@@ -475,8 +505,13 @@ const app = window.app = {
 const typing = () => /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName) && !/range|color/.test(document.activeElement.type);
 function inside(x, y) {
   const r1 = tabUi.getBoundingClientRect();
-  if (x > r1.left - 16 && y > r1.top - 30 && y < r1.bottom + 30) return true;
-  if (panel) { const r2 = flyUi.getBoundingClientRect(); if (x > r2.left - 16 && x < r1.left + 4 && y > r2.top - 16 && y < r2.bottom + 16) return true; }
+  const nearTab = DIR > 0 ? x > r1.left - 16 : x < r1.right + 16;
+  if (nearTab && y > r1.top - 30 && y < r1.bottom + 30) return true;
+  if (panel) {
+    const r2 = flyUi.getBoundingClientRect();
+    const inFly = DIR > 0 ? (x > r2.left - 16 && x < r1.left + 4) : (x < r2.right + 16 && x > r1.right - 4);
+    if (inFly && y > r2.top - 16 && y < r2.bottom + 16) return true;
+  }
   return false;
 }
 function maybeClose() { if (isOpen && !typing() && !sticky && !dragging) { clearTimeout(outT); outT = setTimeout(app.close, 220); } }
@@ -484,7 +519,7 @@ let lastPt = null;
 addEventListener('dragover', e => { lastPt = { x: e.clientX, y: e.clientY }; });
 addEventListener('mousemove', e => {
   lastPt = { x: e.clientX, y: e.clientY };
-  if (dragging && e.buttons === 0) endDrag();
+  if (dragging && e.buttons === 0) dropDrag(e);   // button released outside the window
   if (!isOpen) return;
   const r = tabUi.getBoundingClientRect();
   hoverY = e.clientX > r.left && e.clientY > r.top && e.clientY < r.bottom ? e.clientY : null;
@@ -494,7 +529,7 @@ document.documentElement.addEventListener('mouseleave', () => { hoverY = null; m
 addEventListener('keydown', e => { if (e.key === 'Escape') app.close(); });
 // mouse reaching the edge strip opens the panel (Linux: the only input area while closed)
 let edgeSent = false;
-addEventListener('mousemove', e => { if (!isOpen && !edgeSent && e.clientX >= innerWidth - 6) { edgeSent = true; send('edge'); setTimeout(() => edgeSent = false, 400); } });
+addEventListener('mousemove', e => { if (!isOpen && !edgeSent && atEdge(e.clientX)) { edgeSent = true; send('edge'); setTimeout(() => edgeSent = false, 400); } });
 
 let last = performance.now();
 function frame(now) {
@@ -503,13 +538,13 @@ function frame(now) {
   const sinceOpen = (now - openedAt) / 1000, sinceClose = (now - closedAt) / 1000;
 
   /* ----- tab: icons leave first, then the tab melts back into the edge ----- */
-  const peek = mx < 0 ? 0 : clamp(1 - (innerWidth - mx) / 150) ** 2 * .22;
+  const peek = mx < 0 ? 0 : clamp(1 - mx / 150) ** 2 * .22;
   slide.t = isOpen ? 1 : (sinceClose < .07 ? 1 : peek);
   const sl = slide.step(dt), v = slide.vel;
   const sx = 1 + clamp(Math.abs(v) * .05, 0, .22), sy = 1 - clamp(Math.abs(v) * .03, 0, .12);
-  tabUi.style.transform = `translate(${Math.max(0, 1 - sl) * 120}%, -50%) scale(${sx}, ${sy})`;
+  tabUi.style.transform = `translate(${Math.max(0, 1 - sl) * 120 * DIR}%, -50%) scale(${sx}, ${sy})`;
   const r = 26 + clamp(Math.abs(v) * 6, 0, 18);
-  tabUi.style.borderRadius = `${r}px 0 0 ${r}px`;
+  tabUi.style.borderRadius = DIR > 0 ? `${r}px 0 0 ${r}px` : `0 ${r}px ${r}px 0`;
   tabUi.style.setProperty('--f', `${Math.max(0, 26 * clamp(sl) + clamp(Math.abs(v) * 4, 0, 14))}px`);
 
   /* ----- icons: staggered in (top→down), staggered out (bottom→up), with blur + magnify ----- */
@@ -527,7 +562,7 @@ function frame(now) {
     mg.t = m;
     const p = sp.step(dt), M = mg.step(dt), P = pr.step(dt);
     el.style.opacity = clamp(p);
-    el.style.transform = `translateX(${(1 - p) * 20 - M * 5}px) scale(${(.55 + .45 * p) * (1 + M * .16) * (1 - P * .14)})`;
+    el.style.transform = `translateX(${((1 - p) * 20 - M * 5) * DIR}px) scale(${(.55 + .45 * p) * (1 + M * .16) * (1 - P * .14)})`;
     el.style.filter = p < .97 ? `blur(${(1 - clamp(p)) * 6}px)` : '';
     if (el.classList.contains('active')) activeEl = el;
   });
@@ -553,7 +588,7 @@ function frame(now) {
   const stX = 1 + clamp(gv * .04, -.15, .15), stY = 1 - clamp(gv * .025, -.1, .1);
   flyUi.style.visibility = gs > .02 ? 'visible' : 'hidden';
   flyUi.style.opacity = clamp(gs * 1.6);
-  flyUi.style.transform = `translate(${(1 - gs) * 40}px, ${Y - flyH / 2}px) scale(${Math.max(.05, gs * stX)}, ${Math.max(.1, (.25 + .75 * gs) * stY)})`;
+  flyUi.style.transform = `translate(${(1 - gs) * 40 * DIR}px, ${Y - flyH / 2}px) scale(${Math.max(.05, gs * stX)}, ${Math.max(.1, (.25 + .75 * gs) * stY)})`;
   flyUi.style.borderRadius = `${22 + (1 - clamp(gs)) * 60}px`;
 
   requestAnimationFrame(frame);
@@ -564,11 +599,11 @@ requestAnimationFrame(frame);
 const panels = $$('.panel');
 function toolHTML(id) {
   const w = info(id); if (!w) return '';
-  return `<button class="tool ${w.kind === 'app' ? 'app' : ''} ${id === 'awake' && awake ? 'on' : ''}" draggable="true" data-w="${id}" title="${esc(w.name)}">${w.icon}</button>`;
+  return `<button class="tool ${w.kind === 'app' ? 'app' : ''} ${id === 'awake' && awake ? 'on' : ''}" data-w="${id}" title="${esc(w.name)}">${w.icon}</button>`;
 }
 function tileHTML(id) {
   const w = info(id); if (!w) return '';
-  return `<button class="tile ${id === 'awake' && awake ? 'on' : ''}" draggable="true" data-w="${id}"><b>${w.icon}</b>${esc(w.name)}</button>`;
+  return `<button class="tile ${id === 'awake' && awake ? 'on' : ''}" data-w="${id}"><b>${w.icon}</b>${esc(w.name)}</button>`;
 }
 function renderTools() {
   const keep = new Map($$('#tools .tool').map(el => [el.dataset.w, el]));
@@ -623,7 +658,7 @@ function openWidget(id) {
 function press(el) { if (el._p) { el._p.v = 1; el._p.vel = 0; } }
 tabUi.addEventListener('mousedown', e => { const t = e.target.closest('.tool'); if (t) press(t); });
 tabUi.addEventListener('click', e => {
-  const t = e.target.closest('.tool'); if (!t) return;
+  const t = e.target.closest('.tool'); if (!t || dragMoved) return;
   const id = t.dataset.w, w = info(id);
   if (w.kind === 'app') { setTimeout(() => { app.close(); send('launch', { path: w.app.path }); }, 160); return; }
   if (w.kind === 'action') { w.run(); return; }
@@ -636,7 +671,7 @@ tabUi.addEventListener('mouseover', e => {
   if (info(id)?.kind === 'panel' && (id !== panel || sub) && !(id === 'more' && sub)) { anchorY = anchorOf(t); setPanel(id); }
 });
 $('#tiles').addEventListener('click', e => {
-  const t = e.target.closest('.tile'); if (!t) return;
+  const t = e.target.closest('.tile'); if (!t || dragMoved) return;
   const id = t.dataset.w, w = info(id);
   if (w.kind === 'panel') { anchorY = fy.v; setPanel(id, true); } else openWidget(id);
 });
@@ -646,51 +681,65 @@ flyUi.addEventListener('click', e => { if (e.target.closest('.back')) { anchorY 
 const ph = { dock: Object.assign(document.createElement('div'), { className: 'ph-dock' }), tiles: Object.assign(document.createElement('div'), { className: 'ph-tile' }),
   row: Object.assign(document.createElement('div'), { className: 'ph-row' }) };
 function zoneOf(el) {
+  if (!el) return null;
   if (el.closest('#tools')) return { list: 'dock', box: toolsBox, ph: ph.dock, sel: '.tool', axis: 'y' };
   if (el.closest('#tiles')) return { list: 'more', box: $('#tiles'), ph: ph.tiles, sel: '.tile', axis: 'grid' };
   const wl = el.closest('.wlist'); if (wl) return { list: wl.dataset.zone, box: wl, ph: ph.row, sel: '.wrow', axis: 'y' };
   return null;
 }
 function clearPh() { Object.values(ph).forEach(p => p.remove()); $$('.wlist.drop').forEach(x => x.classList.remove('drop')); }
-document.addEventListener('dragstart', e => {
-  const el = e.target.closest?.('[data-w][draggable]'); if (!el) return;
-  const id = el.dataset.w; if (id === 'settings') { e.preventDefault(); return; }
-  dragging = { id, el }; el.classList.add('ghost'); clearTimeout(outT);
-  e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', id);
-});
-document.addEventListener('dragover', e => {
+
+let dragging = null, dragMoved = false;
+function beginDrag(el, e) {
+  const id = el.dataset.w; if (!id || id === 'settings') return;
+  dragging = { id, el, x0: e.clientX, y0: e.clientY, ghost: null };
+  dragMoved = false;
+  addEventListener('mousemove', dragMove);
+  addEventListener('mouseup', dropDrag, { once: true });
+}
+function dragMove(e) {
   if (!dragging) return;
-  const z = zoneOf(e.target); if (!z) return;
-  if (z.list === 'more' && info(dragging.id)?.dockOnly) return;          // "More" itself can't go inside More
-  e.preventDefault(); e.dataTransfer.dropEffect = 'move';
+  if (!dragMoved) {
+    if (Math.hypot(e.clientX - dragging.x0, e.clientY - dragging.y0) < 5) return;
+    dragMoved = true;
+    clearTimeout(outT);
+    const g = dragging.el.cloneNode(true); g.className += ' drag-ghost'; g.style.opacity = '.9';
+    document.body.appendChild(g); dragging.ghost = g; dragging.el.classList.add('ghost');
+  }
+  dragging.ghost.style.left = e.clientX + 'px'; dragging.ghost.style.top = e.clientY + 'px';
+  dragging.ghost.style.display = 'none';
+  const z = zoneOf(document.elementFromPoint(e.clientX, e.clientY));
+  dragging.ghost.style.display = '';
+  if (!z || (z.list === 'more' && info(dragging.id)?.dockOnly)) return;
   const kids = [...z.box.querySelectorAll(z.sel)].filter(k => k !== dragging.el);
   let before = null;
   for (const k of kids) {
     const r = k.getBoundingClientRect();
-    const hit = z.axis === 'grid' ? (e.clientY < r.top + r.height / 2 && e.clientY > r.top - 8) && e.clientX < r.left + r.width / 2 || e.clientY < r.top - 4
-                                  : e.clientY < r.top + r.height / 2;
+    const hit = z.axis === 'grid'
+      ? (e.clientY < r.bottom && e.clientX < r.left + r.width / 2) || e.clientY < r.top
+      : e.clientY < r.top + r.height / 2;
     if (hit) { before = k; break; }
   }
   if (z.ph.parentElement !== z.box || z.ph.nextElementSibling !== before) z.box.insertBefore(z.ph, before);
   if (z.box.classList.contains('wlist')) { $$('.wlist.drop').forEach(x => x.classList.remove('drop')); z.box.classList.add('drop'); }
-});
-document.addEventListener('drop', e => {
-  if (!dragging) return;
-  const z = zoneOf(e.target) || [ph.dock, ph.tiles, ph.row].map(p => p.parentElement && zoneOf(p)).find(Boolean);
-  if (!z || z.ph.parentElement !== z.box) return;
-  e.preventDefault();
-  // index = placeholder position among real items of this list
-  const idx = [...z.box.children].filter(k => k === z.ph || (k.matches(z.sel) && k !== dragging.el)).indexOf(z.ph);
-  const id = dragging.id;
-  endDrag();                                   // re-render below detaches the dragged node, so its dragend never arrives
-  moveWidget(id, z.list, idx, z.box.classList.contains('wlist'));
-  setTimeout(() => { if (lastPt && !inside(lastPt.x, lastPt.y)) maybeClose(); }, 50);
-});
-function endDrag() {
-  if (!dragging) return;
-  dragging.el.classList.remove('ghost'); dragging = null; clearPh();
 }
-document.addEventListener('dragend', endDrag);
+function dropDrag(e) {
+  removeEventListener('mousemove', dragMove);
+  if (!dragging) return;
+  const { id, el, ghost } = dragging;
+  const z = [ph.dock, ph.tiles, ph.row].map(x => x.parentElement && zoneOf(x)).find(Boolean);
+  ghost?.remove(); el.classList.remove('ghost'); dragging = null;
+  if (dragMoved && z && z.ph.parentElement === z.box) {
+    const idx = [...z.box.children].filter(k => k === z.ph || (k.matches(z.sel) && k !== el)).indexOf(z.ph);
+    clearPh();
+    moveWidget(id, z.list, idx, z.box.classList.contains('wlist'));
+  } else clearPh();
+  setTimeout(() => { dragMoved = false; if (lastPt && !inside(lastPt.x, lastPt.y)) maybeClose(); }, 60);
+}
+addEventListener('mousedown', e => { const el = e.target.closest('[data-w]'); if (el && e.button === 0) beginDrag(el, e); });
+
+// files dragged in from the file manager
+app.dropHint = on => $('#dropHint').classList.toggle('on', !!on);
 function moveWidget(id, list, idx, withHidden = false) {
   if (list === 'more' && info(id)?.dockOnly) return;
   const wasHidden = S.hidden.includes(id);
@@ -709,7 +758,7 @@ function moveWidget(id, list, idx, withHidden = false) {
 function rowHTML(id, zone) {
   const w = info(id), off = S.hidden.includes(id);
   const moveBtn = w.dockOnly ? '' : `<button class="wb" data-to="${zone === 'dock' ? 'more' : 'dock'}" title="${zone === 'dock' ? 'Move into More' : 'Move to dock'}">${zone === 'dock' ? '↘ More' : '↗ Dock'}</button>`;
-  return `<div class="wrow ${off ? 'off' : ''}" draggable="true" data-w="${id}">
+  return `<div class="wrow ${off ? 'off' : ''}" data-w="${id}">
     <span class="grip">⋮⋮</span><span class="wi">${w.icon}</span><span class="wn">${esc(w.name)}</span>${moveBtn}
     <button class="wb" data-eye title="${off ? 'Show' : 'Hide'}">${off ? '○' : '●'}</button>
     ${w.kind === 'app' ? '<button class="wb" data-rm title="Remove app">✕</button>' : ''}</div>`;
@@ -719,7 +768,7 @@ function renderWidgets() {
   $('#wMore').innerHTML = S.more.map(id => rowHTML(id, 'more')).join('') || '<div class="empty">Drop widgets here</div>';
 }
 $('.spage[data-p=widgets]').addEventListener('click', e => {
-  const b = e.target.closest('.wb'), row = e.target.closest('.wrow'); if (!b || !row) return;
+  const b = e.target.closest('.wb'), row = e.target.closest('.wrow'); if (!b || !row || dragMoved) return;
   const id = row.dataset.w;
   if (b.dataset.to) moveWidget(id, b.dataset.to, b.dataset.to === 'dock' ? S.dock.filter(x => x !== id && x !== 'more').length : 0, true);
   else if ('eye' in b.dataset) { S.hidden = S.hidden.includes(id) ? S.hidden.filter(x => x !== id) : [...S.hidden, id]; save(); renderAll(); }
@@ -731,6 +780,7 @@ $('#stabs').addEventListener('click', e => {
   $$('.spage').forEach(x => x.classList.toggle('on', x.dataset.p === p));
 });
 $('#addApp').onclick = () => send('addApp');
+$('#addFolder').onclick = () => send('addApp', { folder: true });
 
 const toastEl = $('#toast'); let tt;
 function toast(msg) { toastEl.textContent = msg; toastEl.classList.remove('show'); void toastEl.offsetWidth; toastEl.classList.add('show'); clearTimeout(tt); tt = setTimeout(() => toastEl.classList.remove('show'), 1600); }
@@ -784,18 +834,31 @@ function addClip(text) {
   clips = [{ text, t: Date.now() }, ...clips.filter(c => c.text !== text)].slice(0, 50);
   renderClips();
 }
+// a copied image arrives as a thumbnail; the full pixels stay on the native side
+app.clipImage = img => {
+  const row = { img, t: Date.now(), pin: !!img.pinned };
+  clips = [row, ...clips.filter(c => c.img?.id !== img.id)].slice(0, 50);
+  renderClips();
+};
 function renderClips() {
   const q = $('#clipSearch').value.toLowerCase();
-  const pinned = S.pins.map(text => ({ text, pin: true })), rest = clips.filter(c => !S.pins.includes(c.text));
-  const list = [...pinned, ...rest].filter(c => c.text.toLowerCase().includes(q));
+  const pinned = [...clips.filter(c => c.img && c.pin), ...S.pins.map(text => ({ text, pin: true }))];
+  const rest = clips.filter(c => c.img ? !c.pin : !S.pins.includes(c.text));
+  const list = [...pinned, ...rest].filter(c => c.img ? !q : c.text.toLowerCase().includes(q));
   window._clipView = list;
-  $('#clipList').innerHTML = list.length ? list.map((c, i) =>
-    `<button class="item spring ${c.pin ? 'pinned' : ''}" data-i="${i}">${esc(c.text.replace(/\s+/g, ' ').slice(0, 120))}<small>${c.pin ? 'pinned' : ago(c.t)} · ${c.text.length} chars</small><span class="acts"><span data-pin title="${c.pin ? 'Unpin' : 'Pin'}">${c.pin ? '★' : '☆'}</span><span data-x title="Remove">×</span></span></button>`
+  $('#clipList').innerHTML = list.length ? list.map((c, i) => c.img
+    ? `<button class="item shot spring ${c.pin ? 'pinned' : ''}" data-i="${i}"><img src="${c.img.thumb}" alt=""><small>Image · ${c.img.w}×${c.img.h} · ${c.pin ? 'pinned' : ago(c.t)}</small><span class="acts"><span data-pin title="${c.pin ? 'Unpin' : 'Pin'}">${c.pin ? '★' : '☆'}</span><span data-x title="Remove">×</span></span></button>`
+    : `<button class="item spring ${c.pin ? 'pinned' : ''}" data-i="${i}">${esc(c.text.replace(/\s+/g, ' ').slice(0, 120))}<small>${c.pin ? 'pinned' : ago(c.t)} · ${c.text.length} chars</small><span class="acts"><span data-pin title="${c.pin ? 'Unpin' : 'Pin'}">${c.pin ? '★' : '☆'}</span><span data-x title="Remove">×</span></span></button>`
   ).join('') : '<div class="empty">Copy something and it shows up here</div>';
 }
 $('#clipList').addEventListener('click', e => {
   const b = e.target.closest('.item'); if (!b) return;
   const c = window._clipView[+b.dataset.i];
+  if (c.img) {
+    if (e.target.closest('[data-pin]')) { c.pin = !c.pin; send('pinImage', { id: c.img.id, on: c.pin }); renderClips(); return; }
+    if (e.target.closest('[data-x]')) { if (c.pin) send('pinImage', { id: c.img.id, on: false }); clips = clips.filter(x => x.img?.id !== c.img.id); renderClips(); return; }
+    send('clipImage', { id: c.img.id }); app.close(); return;
+  }
   if (e.target.closest('[data-pin]')) { S.pins = c.pin ? S.pins.filter(x => x !== c.text) : [c.text, ...S.pins].slice(0, 30); save(); renderClips(); return; }
   if (e.target.closest('[data-x]')) { if (c.pin) { S.pins = S.pins.filter(x => x !== c.text); save(); } clips = clips.filter(x => x.text !== c.text); renderClips(); return; }
   deliver(c.text);
@@ -828,11 +891,31 @@ $('#eyedrop').onclick = () => { app.close(); send('pickColor'); };
 setColor(color); renderRecent();
 
 /* ---- note ---- */
-const note = $('#note'); note.value = init.notes || ''; let nt;
-note.addEventListener('input', () => { $('#noteInfo').textContent = 'saving…'; clearTimeout(nt);
-  nt = setTimeout(() => { send('note', { text: note.value }); $('#noteInfo').textContent = `saved · ${note.value.length} chars`; }, 400); });
+const note = $('#note');
+let notes = Array.isArray(init.notes) ? init.notes : [];
+if (!notes.length) notes = [{ id: 'n' + Date.now(), text: '' }];
+let noteAt = 0, nt;
+const noteTitle = n => (n.text.trim().split('\n')[0] || 'Empty note').slice(0, 18);
+function renderNotes() {
+  noteAt = Math.min(noteAt, notes.length - 1);
+  $('#noteTabs').innerHTML = notes.map((n, i) => `<button class="chip spring ${i === noteAt ? 'on' : ''}" data-n="${i}">${esc(noteTitle(n))}</button>`).join('');
+  note.value = notes[noteAt].text;
+  $('#noteInfo').textContent = `${notes.length} note${notes.length > 1 ? 's' : ''}`;
+}
+function saveNotes(label) { send('note', { notes }); $('#noteInfo').textContent = label || 'saved'; }
+$('#noteTabs').onclick = e => { const i = e.target.closest('[data-n]')?.dataset.n; if (i !== undefined) { noteAt = +i; renderNotes(); note.focus(); } };
+note.addEventListener('input', () => {
+  notes[noteAt].text = note.value; $('#noteInfo').textContent = 'saving…';
+  clearTimeout(nt); nt = setTimeout(() => { saveNotes(`saved · ${note.value.length} chars`); $('#noteTabs').innerHTML = notes.map((n, i) => `<button class="chip spring ${i === noteAt ? 'on' : ''}" data-n="${i}">${esc(noteTitle(n))}</button>`).join(''); }, 400);
+});
+$('#noteNew').onclick = () => { notes.unshift({ id: 'n' + Date.now(), text: '' }); noteAt = 0; renderNotes(); saveNotes('new note'); note.focus(); };
 $('#noteCopy').onclick = () => copy(note.value);
-$('#noteClear').onclick = () => { note.value = ''; note.dispatchEvent(new Event('input')); };
+$('#noteDel').onclick = () => {
+  notes.splice(noteAt, 1);
+  if (!notes.length) notes = [{ id: 'n' + Date.now(), text: '' }];
+  noteAt = 0; renderNotes(); saveNotes('note deleted');
+};
+renderNotes();
 
 /* ---- media keys ---- */
 $('[data-name=media]').addEventListener('click', e => { const k = e.target.closest('[data-key]'); if (k) send('key', { name: k.dataset.key }); });
@@ -1026,6 +1109,21 @@ if (OS === 'windows') {
   $('#tContext').onclick = () => { const on = !$('#tContext').classList.contains('on'); $('#tContext').classList.toggle('on', on); send('contextMenu', { on });
     toast(on ? 'Added to the right-click menu' : 'Removed from the right-click menu'); };
 } else $('#ctxRow').style.display = 'none';
+
+// edge + monitor
+const SCREENS = Array.isArray(init.screens) ? init.screens : [];
+$('#edgeSel').value = S.edge === 'left' ? 'left' : 'right';
+$('#monSel').innerHTML = SCREENS.map((m, i) => `<option value="${i}">${esc(m.name || 'Monitor ' + (i + 1))} · ${m.w}×${m.h}</option>`).join('');
+$('#monSel').value = String(Math.min(S.monitor || 0, Math.max(0, SCREENS.length - 1)));
+if (SCREENS.length < 2) $('#monRow').style.display = 'none';
+function applyPlacement() {
+  S.edge = $('#edgeSel').value; S.monitor = +$('#monSel').value || 0; save();
+  send('placement', { edge: S.edge, monitor: S.monitor });
+}
+$('#edgeSel').onchange = applyPlacement;
+$('#monSel').onchange = applyPlacement;
+app.placed = ({ edge }) => { DIR = edge === 'left' ? -1 : 1; document.body.classList.toggle('left', DIR < 0); mx = -1; toast(`Panel moved to the ${edge}`); };
+if (S.edge === 'left') { DIR = -1; document.body.classList.add('left'); }
 
 $('#verNow').textContent = 'v' + (init.version || '1.0.0');
 let updateUrl = null;

@@ -238,3 +238,20 @@ pub fn context_menu_enabled() -> bool {
 }
 
 pub fn set_context_menu(_: bool) {}
+
+pub fn clip_image() -> Option<(u32, u32, Vec<u8>)> {
+    None // images need extra toolkit support here; text history works everywhere
+}
+
+pub fn set_clip_image(_: u32, _: u32, _: &[u8]) -> bool {
+    false
+}
+
+pub fn pick_folder() -> Option<String> {
+    if cfg!(target_os = "macos") {
+        output("osascript", &["-e", "POSIX path of (choose folder with prompt \"Add a folder to Right Panel\")"])
+    } else {
+        output("zenity", &["--file-selection", "--directory", "--title=Add a folder to Right Panel"])
+            .or_else(|| output("kdialog", &["--getexistingdirectory", "~"]))
+    }
+}
