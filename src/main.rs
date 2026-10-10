@@ -38,6 +38,9 @@ static PANEL_Y: AtomicI32 = AtomicI32::new(0);
 static PANEL_H: AtomicI32 = AtomicI32::new(0);
 static EDGE_X: AtomicI32 = AtomicI32::new(0);
 static ON_LEFT: AtomicBool = AtomicBool::new(false);
+/// Another monitor continues past the panel's edge, so the pointer can cross it on the way over.
+static SCALE_BITS: AtomicU64 = AtomicU64::new(0x3FF0_0000_0000_0000); // 1.0
+static EDGE_SHARED: AtomicBool = AtomicBool::new(false);
 /// Recent clipboard images, newest last. Thumbnails go to the UI; the pixels stay here.
 static IMAGES: Mutex<Vec<(u64, u32, u32, Vec<u8>)>> = Mutex::new(Vec::new());
 /// Pinned images are also kept on disk, so they come back after a restart.
@@ -192,11 +195,12 @@ fn restore_pins(proxy: EventLoopProxy<Ev>) {
 }
 
 /* ---------------- edge hover detection ---------------- */
-fn spawn_edge_watch(proxy: EventLoopProxy<Ev>, scale: f64) {
+fn spawn_edge_watch(proxy: EventLoopProxy<Ev>) {
     thread::spawn(move || {
         let mut near = false;
         let mut last = (i32::MIN, i32::MIN);
         let mut held = 0u32;
+        let mut dwell = 0u32;
         loop {
             thread::sleep(Duration::from_millis(12));
             if OPEN.load(Ordering::Relaxed) || PICKING.load(Ordering::Relaxed) {
@@ -206,6 +210,7 @@ fn spawn_edge_watch(proxy: EventLoopProxy<Ev>, scale: f64) {
             let Some((px, py)) = sys::cursor_pos() else { continue };
             let (win_y, h, edge) = (PANEL_Y.load(Ordering::Relaxed), PANEL_H.load(Ordering::Relaxed), EDGE_X.load(Ordering::Relaxed));
             let left = ON_LEFT.load(Ordering::Relaxed);
+            let scale = f64::from_bits(SCALE_BITS.load(Ordering::Relaxed));
             let moved = (px, py) != last;
             last = (px, py);
             let in_band = py >= win_y && py < win_y + h;
@@ -213,7 +218,13 @@ fn spawn_edge_watch(proxy: EventLoopProxy<Ev>, scale: f64) {
             // a held button usually means dragging something: wait until it rests on the edge
             let dragging = sys::left_down();
             held = if dragging && in_band && (0..=1).contains(&dist) { held + 1 } else { 0 };
-            if moved && in_band && (0..=1).contains(&dist) && (!dragging || held > 30) {
+            // with a neighbouring monitor the pointer just passes through the edge on its way to the
+            // other screen, so only open once it has lingered on (or right next to) the edge
+            let shared = EDGE_SHARED.load(Ordering::Relaxed);
+            dwell = if shared && in_band && (0..=3).contains(&dist) { dwell + 1 } else { 0 };
+            let at_edge = if shared { dwell > 25 } else { moved && (0..=1).contains(&dist) };
+            if at_edge && in_band && (!dragging || held > 30) {
+                dwell = 0;
                 sys::remember_foreground();
                 OPEN.store(true, Ordering::Relaxed);
                 let _ = proxy.send_event(Ev::Open);
@@ -332,6 +343,7 @@ struct Screen {
     y: i32,
     w: i32,
     h: i32,
+    scale: f64,
     name: String,
 }
 
@@ -341,23 +353,33 @@ fn screens(event_loop: &tao::event_loop::EventLoop<Ev>) -> Vec<Screen> {
         .enumerate()
         .map(|(i, m)| {
             let (p, s) = (m.position(), m.size());
-            Screen { x: p.x, y: p.y, w: s.width as i32, h: s.height as i32, name: m.name().unwrap_or_else(|| format!("Monitor {}", i + 1)) }
+            Screen { x: p.x, y: p.y, w: s.width as i32, h: s.height as i32, scale: m.scale_factor(), name: m.name().unwrap_or_else(|| format!("Monitor {}", i + 1)) }
         })
         .collect()
 }
 
 /// Moves the panel to the chosen edge of the chosen screen and tells the hover watcher about it.
-fn place(window: &tao::window::Window, screens: &[Screen], idx: usize, left: bool, scale: f64) -> (i32, i32) {
+fn place(window: &tao::window::Window, screens: &[Screen], idx: usize, left: bool) -> (i32, i32) {
     let s = screens.get(idx).or_else(|| screens.first()).expect("no monitor");
+    let scale = s.scale;
     let w = (WIN_W * scale) as i32;
     let h = ((WIN_H * scale) as i32).min(s.h);
     let x = if left { s.x } else { s.x + s.w - w };
     let y = s.y + (s.h - h) / 2;
+    window.set_inner_size(PhysicalSize::new(w, h));
     window.set_outer_position(PhysicalPosition::new(x, y));
+    let edge = if left { s.x } else { s.x + s.w };
+    let shared = screens.iter().any(|o| {
+        let touches = if left { o.x + o.w == edge } else { o.x == edge };
+        touches && o.y < y + h && o.y + o.h > y
+    });
+    EDGE_SHARED.store(shared, Ordering::Relaxed);
+    SCALE_BITS.store(scale.to_bits(), Ordering::Relaxed);
+    sys::set_scale(scale);
     PANEL_X.store(x, Ordering::Relaxed);
     PANEL_Y.store(y, Ordering::Relaxed);
     PANEL_H.store(h, Ordering::Relaxed);
-    EDGE_X.store(if left { s.x } else { s.x + s.w }, Ordering::Relaxed);
+    EDGE_X.store(edge, Ordering::Relaxed);
     ON_LEFT.store(left, Ordering::Relaxed);
     (w, h)
 }
@@ -379,14 +401,32 @@ fn set_passthrough(window: &tao::window::Window, on: bool) {
     if let Some(gdk) = gw.window() {
         let (w, h) = (gw.allocated_width().max(1), gw.allocated_height().max(1));
         let strip = 4;
+        let x = if ON_LEFT.load(Ordering::Relaxed) { 0 } else { (w - strip).max(0) };
         let rect = if on {
-            gtk::cairo::RectangleInt::new((w - strip).max(0), 0, strip, h)
+            gtk::cairo::RectangleInt::new(x, 0, strip, h)
         } else {
             gtk::cairo::RectangleInt::new(0, 0, w, h)
         };
         gdk.input_shape_combine_region(&gtk::cairo::Region::create_rectangle(&rect), 0, 0);
     }
 }
+
+/// Linux: the panel must hold keyboard focus or its text fields can't be typed into.
+#[cfg(target_os = "linux")]
+fn grab_keyboard(window: &tao::window::Window, webview: &wry::WebView) {
+    use gtk::prelude::*;
+    use tao::platform::unix::WindowExtUnix;
+    let gw = window.gtk_window();
+    gw.present();
+    if let Some(gdk) = gw.window() {
+        gdk.focus(0);
+    }
+    window.set_focus();
+    let _ = webview.focus();
+}
+
+#[cfg(not(target_os = "linux"))]
+fn grab_keyboard(_: &tao::window::Window, _: &wry::WebView) {}
 
 /* ---------------- tray ---------------- */
 mod tray {
@@ -504,9 +544,6 @@ fn main() {
     }
     let proxy = event_loop.create_proxy();
 
-    let monitor = event_loop.primary_monitor().or_else(|| event_loop.available_monitors().next()).expect("no monitor");
-    let scale = monitor.scale_factor();
-    sys::set_scale(scale);
     let all_screens = screens(&event_loop);
     let on_left = settings["edge"] == "left";
     let mut screen_idx = settings["monitor"].as_u64().unwrap_or(0) as usize;
@@ -514,6 +551,8 @@ fn main() {
         screen_idx = 0;
     }
     let home = all_screens.get(screen_idx).or_else(|| all_screens.first()).expect("no monitor");
+    let scale = home.scale;
+    sys::set_scale(scale);
     let (w, h) = ((WIN_W * scale) as i32, ((WIN_H * scale) as i32).min(home.h));
     let x = if on_left { home.x } else { home.x + home.w - w };
     let y = home.y + (home.h - h) / 2;
@@ -542,7 +581,10 @@ fn main() {
         use gtk::prelude::*;
         use tao::platform::unix::WindowExtUnix;
         let gw = window.gtk_window();
-        gw.set_type_hint(gtk::gdk::WindowTypeHint::Dock);
+        // Utility, not Dock: most window managers never hand keyboard focus to dock windows,
+        // which left every text field in the panel dead on Linux
+        gw.set_type_hint(gtk::gdk::WindowTypeHint::Utility);
+        gw.set_skip_pager_hint(true);
         gw.set_keep_above(true);
         gw.set_accept_focus(true); // dock-type windows still need the keyboard for search / notes
         gw.move_(x, y);
@@ -612,8 +654,8 @@ fn main() {
     spawn_clip_watch(proxy.clone());
     spawn_inbox_watch(proxy.clone());
     restore_pins(proxy.clone());
-    place(&window, &all_screens, screen_idx, on_left, scale);
-    spawn_edge_watch(proxy.clone(), scale);
+    place(&window, &all_screens, screen_idx, on_left);
+    spawn_edge_watch(proxy.clone());
     let mut tray: Option<tray::Tray> = None;
 
     event_loop.run(move |event, _, flow| {
@@ -631,12 +673,14 @@ fn main() {
             }
             Event::UserEvent(Ev::Open) => {
                 set_passthrough(&window, false);
+                grab_keyboard(&window, &webview);
                 let _ = webview.evaluate_script("app.open()");
             }
             Event::UserEvent(Ev::Show(panel)) => {
                 sys::remember_foreground();
                 OPEN.store(true, Ordering::Relaxed);
                 set_passthrough(&window, false);
+                grab_keyboard(&window, &webview);
                 let _ = webview.evaluate_script(&format!("app.show('{panel}')"));
             }
             Event::UserEvent(Ev::Menu(id)) => match id.as_str() {
@@ -666,6 +710,7 @@ fn main() {
                         if !OPEN.swap(true, Ordering::Relaxed) {
                             sys::remember_foreground();
                             set_passthrough(&window, false);
+                            grab_keyboard(&window, &webview);
                             let _ = webview.evaluate_script("app.open()");
                         }
                     }
@@ -743,7 +788,7 @@ fn main() {
                     "placement" => {
                         let left = m["edge"] == "left";
                         let idx = m["monitor"].as_u64().unwrap_or(0) as usize;
-                        place(&window, &all_screens, idx, left, scale);
+                        place(&window, &all_screens, idx, left);
                         let _ = webview.evaluate_script(&format!("app.placed({})", json!({ "edge": if left { "left" } else { "right" } })));
                     }
                     "pinImage" => {

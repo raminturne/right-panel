@@ -276,6 +276,7 @@
     <div class="head"><button class="back">←</button><h4>Timer</h4></div>
     <div class="timer" id="timerOut">05:00</div>
     <div class="row" id="timerPresets"></div>
+    <div class="row"><input class="field" id="timerMin" type="number" min="0" max="999" placeholder="Min"><input class="field" id="timerSec" type="number" min="0" max="59" placeholder="Sec"><button class="btn" id="timerSet">Set</button></div>
     <div class="row"><button class="btn primary" id="timerStart">Start</button><button class="btn" id="timerReset">Reset</button></div>
   </div>
 
@@ -354,6 +355,7 @@
       <div class="set"><span id="startLbl">Start with Windows</span><button class="toggle" id="tStartup"></button></div>
       <div class="set" id="pasteRow"><span>Paste on click</span><button class="toggle" id="tPaste"></button></div>
       <div class="set"><span>Magnify icons on hover</span><button class="toggle" id="tMagnify"></button></div>
+      <div class="set"><span>Animation speed</span><select class="field" id="speedSel" style="width:auto"><option value="0.5">Slow</option><option value="0.75">Relaxed</option><option value="1">Normal</option><option value="1.5">Fast</option><option value="2.5">Very fast</option></select></div>
       <div class="set"><span>Panel edge</span><select class="field" id="edgeSel" style="width:auto"><option value="right">Right</option><option value="left">Left</option></select></div>
       <div class="set" id="monRow"><span>Monitor</span><select class="field" id="monSel" style="width:auto"></select></div>
       <div class="set" id="ctxRow"><span>Add to right-click menu<small class="hint" style="display:block">Files &amp; folders → “Add to Right Panel”</small></span><button class="toggle" id="tContext"></button></div>
@@ -374,7 +376,7 @@ const send = (t, o = {}) => window.ipc.postMessage(JSON.stringify({ t, ...o }));
 const init = window.__init || {};
 const OS = init.platform || 'windows';   // windows | macos | linux
 const S = Object.assign({ theme: 'midnight', accent: '#000000', startup: false, paste: true, magnify: true, recentEmoji: [], recentColors: [],
-  edge: 'right', monitor: 0, updates: true, lastCheck: 0, hidden: [], apps: [], snippets: [], pins: [], engine: 'Google', zones: ['UTC', 'Europe/London', 'America/New_York', 'Asia/Tokyo'] }, init.settings || {});
+  edge: 'right', monitor: 0, speed: 1, updates: true, lastCheck: 0, hidden: [], apps: [], snippets: [], pins: [], engine: 'Google', zones: ['UTC', 'Europe/London', 'America/New_York', 'Asia/Tokyo'] }, init.settings || {});
 const save = () => send('settings', { settings: S });
 const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -533,9 +535,9 @@ addEventListener('mousemove', e => { if (!isOpen && !edgeSent && atEdge(e.client
 
 let last = performance.now();
 function frame(now) {
-  const dt = Math.min((now - last) / 1000, 1 / 30); last = now;
+  const spd = +S.speed || 1, dt = Math.min((now - last) / 1000, 1 / 30) * spd; last = now;
   const items = $$('#tabUi .tool'), n = items.length;
-  const sinceOpen = (now - openedAt) / 1000, sinceClose = (now - closedAt) / 1000;
+  const sinceOpen = (now - openedAt) / 1000 * spd, sinceClose = (now - closedAt) / 1000 * spd;
 
   /* ----- tab: icons leave first, then the tab melts back into the edge ----- */
   const peek = mx < 0 ? 0 : clamp(1 - mx / 150) ** 2 * .22;
@@ -1028,9 +1030,16 @@ $('#calcOut').onclick = () => { const v = calc($('#calcIn').value); if (v !== nu
 
 /* ---- timer ---- */
 let tTotal = 300, tLeft = 300, tRun = null;
-const fmtT = s => `${String(s / 60 | 0).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
-$('#timerPresets').innerHTML = [1, 5, 10, 25].map(m => `<button class="btn" data-m="${m}">${m}m</button>`).join('');
+const fmtT = s => (s >= 3600 ? `${s / 3600 | 0}:` + String((s / 60 | 0) % 60).padStart(2, '0') : String(s / 60 | 0).padStart(2, '0')) + `:${String(s % 60).padStart(2, '0')}`;
+$('#timerPresets').innerHTML = [1, 5, 10, 15, 25, 45, 60].map(m => `<button class="btn" data-m="${m}">${m}m</button>`).join('');
 $('#timerPresets').onclick = e => { const m = e.target.dataset.m; if (m) { clearInterval(tRun); tRun = null; tTotal = tLeft = m * 60; drawT(); } };
+function setTimer() {
+  const sec = (Math.max(0, +$('#timerMin').value || 0) * 60) + Math.max(0, +$('#timerSec').value || 0);
+  if (!sec) return toast('Enter minutes or seconds');
+  clearInterval(tRun); tRun = null; tTotal = tLeft = Math.min(sec, 999 * 60 + 59); drawT();
+}
+$('#timerSet').onclick = setTimer;
+['#timerMin', '#timerSec'].forEach(id => $(id).addEventListener('keydown', e => { if (e.key === 'Enter') setTimer(); }));
 function drawT() { $('#timerOut').textContent = fmtT(tLeft); $('#timerStart').textContent = tRun ? 'Pause' : 'Start'; }
 $('#timerStart').onclick = () => {
   if (tRun) { clearInterval(tRun); tRun = null; }
@@ -1121,6 +1130,8 @@ function applyPlacement() {
   send('placement', { edge: S.edge, monitor: S.monitor });
 }
 $('#edgeSel').onchange = applyPlacement;
+$('#speedSel').value = String(S.speed || 1);
+$('#speedSel').onchange = e => { S.speed = +e.target.value || 1; save(); };
 $('#monSel').onchange = applyPlacement;
 app.placed = ({ edge }) => { DIR = edge === 'left' ? -1 : 1; document.body.classList.toggle('left', DIR < 0); mx = -1; toast(`Panel moved to the ${edge}`); };
 if (S.edge === 'left') { DIR = -1; document.body.classList.add('left'); }
